@@ -1,0 +1,1450 @@
+                                             CHOQOLATE: Organizing Concept Bottleneck Latent Spaces with Choquet
+                                                                       Integrals
+                                                                       Rémi Kazmierczak1 , Johanne Cohen2 , Marianne Clausel1
+                                                                                 1
+                                                                                     CRAN, Université de Lorraine, CNRS, Nancy, France
+                                                                                  2
+                                                                                     LISN, Université Paris-Saclay, CNRS, Orsay, France
+
+
+
+                                                                     Abstract                                   co-activating concepts into a few latent nodes (Figure 1a).
+arXiv:2609.37786v1 [cs.CV] 29 Sep 2026
+
+
+
+
+                                           Concept Bottleneck Models (CBMs) built on vision-language            For the resulting representation to be both interpretable and
+                                           models such as CLIP represent a latent space as human-               predictive, we require five properties: (i) attribution sparsity
+                                           understandable concepts. These representations are unfaith-          (each node concentrates its attribution on a few concepts);
+                                           ful: related concepts are entangled, so individual scores do not     (ii) semantic coherence (a node’s concepts are semantically
+                                           reflect their intended meaning. We propose CHOQOLATE, an             related); (iii) attributability (each concept’s contribution to
+                                           interpretable-by-design layer based on 2-additive Choquet in-        the nodes is directly computable); (iv) low dimensionality
+                                           tegrals, which merges correlated concepts into compact nodes.        (few enough nodes to compress the concept space); and (v)
+                                           Across four datasets, CHOQOLATE achieves a favorable                 informativeness (the nodes retain what classification needs,
+                                           accuracy-interpretability trade-off, with weight-sparse and se-      not everything the input contains). Properties (iii) and (iv)
+                                           mantically coherent nodes. A closed-form gradient derivation,
+                                                                                                                hold by construction, via closed-form Shapley values and a
+                                           backed by experiments, explains why Choquet layers drive this
+                                           organization without explicit supervision. Choquet weights           node count far below the concept count. Attributability, in
+                                           also map directly to Shapley values, which enables test-time         particular, enables post-hoc removal of unwanted concepts.
+                                           intervention. On standard bias-mitigation benchmarks, sup-           Properties (i), (ii), and (v) are quantified in Section 6 by At-
+                                           pressing spurious concepts after training performs on par with       tribution Gini, Node Coherence, and accuracy, respectively.
+                                           methods that require group annotations or retraining, while             Our tool is the 2-additive Choquet integral (Grabisch
+                                           needing neither.                                                     1997), a classical aggregation operator from multicriteria
+                                                                                                                decision theory that combines individual weights with pair-
+                                                              1     Introduction                                wise interaction terms, capturing synergy when positive and
+                                         Deep image classifiers reach high accuracy while offering lit-         redundancy when negative. Since redundancy is precisely
+                                         tle insight into what drives their predictions. One influential        the structure that CLIP similarities exhibit (Figure 1b), this
+                                         answer routes inference through Concept Bottleneck Models              operator is a natural choice for fusing co-activating concepts.
+                                         (CBMs) (Koh et al. 2020), that seek interpretability by rout-          We show that layers of 2-additive Choquet integrals, trained
+                                         ing inference through a layer of human-understandable con-             for classification, produce latent nodes that satisfy the five
+                                         cepts from which the prediction is derived. Early CBMs re-             properties above, without any supervision of the concept-to-
+                                         quired manual concept annotations for every image. Vision-             node assignment. CHOQOLATE stacks two such layers, one
+                                         language foundation models such as CLIP (Radford et al.                mapping concepts to a few latent nodes and one mapping
+                                         2021) remove this cost: the similarity between an image em-            nodes to class scores.
+                                         bedding and a textual concept embedding directly provides                 Our contributions are as follows:
+                                         a concept score, with no annotation at all (Oikarinen et al.            • We introduce CHOQuet Organization of LATEnts
+                                         2023; Yuksekgonul, Wang, and Zou 2023; Yang et al. 2023).                 (CHOQOLATE), which uses 2-additive Choquet inte-
+                                         The annotations disappear, but a new problem takes their                  grals to build interpretable-by-design layers for concept
+                                         place: concept unfaithfulness. Individual concept scores do               bottleneck models.
+                                         not reliably reflect their intended meaning (Debole et al.              • We show, across four datasets and metrics, that CHOQO-
+                                         2025; Lewis et al. 2024) because CLIP embeddings entangle                 LATE offers a favorable trade-off between accuracy and
+                                         related concepts. Figure 1b illustrates the underlying redun-             latent-space quality.
+                                         dancy on Cats/Dogs/Cars (Kazmierczak et al. 2024): the
+                                         CLIP similarities of hair, muzzle, and tail are strongly cor-           • We explain why and how CHOQOLATE organizes the
+                                         related, so a cat’s tail concept activates even on face-only              latent space without explicit supervision, through both a
+                                         images, where no tail is visible. This mirrors the “bag-of-               closed-form gradient derivation and an empirical study
+                                         words” effect (Yuksekgonul et al. 2023): CLIP blurs seman-                of its training dynamics.
+                                         tically similar concepts into overlapping activations.                  • We show that the architecture supports Post-hoc Concept
+                                            Rather than disentangling the backbone, we take this re-               Removal (CHOQ-PCR): on standard debiasing bench-
+                                         dundancy as given and reorganize the concept space, fusing                marks, suppressing spurious concepts after training per-
+                                                                                  cats
+                                                                                  dogs
+                                                                                  cars
+
+                                                                                                                              25
+                                                                                                                              20
+                                                                                                                              15
+                                                                                                                                   tail
+                                                                                                                              10
+                                                                                                                              5
+                                                                                                                           1820
+                                                                                                                       1416
+                                                                                2 4
+                                                                                    6 8                            1012  z le
+                                                                                                                     muz
+                                                                                        10 12
+                                                                                         hair   14 16
+                                                                                                        18   6 8
+
+
+
+
+           (a) CHOQOLATE vs. a standard network                    (b) CLIP-similarity redundancy across related concepts
+
+Figure 1: Concept redundancy motivates CHOQOLATE’s structured design. (a) In a standard network, every input concept
+connects to each hidden node, mixing concepts indiscriminately; CHOQOLATE instead connects each node to a small group
+of correlated concepts, yielding sparse and interpretable nodes. (b) Visualizing a 3-concept bottleneck (hair, muzzle, tail) on
+Cats/Dogs/Cars reveals strongly correlated axes, with samples spreading along a shared diagonal rather than across independent
+concept dimensions.
+
+
+   forms on par with methods that require group annotations       CLIP scores comparable to present ones. Our word-cloud
+   or retraining, while needing neither.                          representation of each latent node, i.e., a cluster of mutually
+                                                                  correlated concepts, makes this entanglement explicit rather
+                   2    Related Work                              than hiding it behind a single concept score. A parallel line
+                                                                  of work translates embeddings into human-understandable
+2.1   Concept Bottleneck Models                                   structure, notably in mechanistic interpretability (Elhage
+The term Concept Bottleneck Model (CBM), introduced               et al. 2021). Sparse autoencoders (Bricken et al. 2023) are
+by Koh et al. (2020), refers to the use of a bottleneck           popular here, with variants adding hierarchy (Bussmann,
+of human-specified concepts to perform a task, predomi-           Leask, and Nanda 2025) or multiple latent spaces (Dunefsky,
+nantly image classification, so that the resulting model is       Chlenski, and Nanda 2024). On the CBM side, Bhalla et al.
+interpretable by design. The term names a longer lineage          (2024) propose a task-agnostic image-embedding decompo-
+of attribute-based methods (Kumar et al. 2009; Lampert,           sition and Rao et al. (2024) interpret the encoder output via
+Nickisch, and Harmeling 2009), whose early implementa-            a naming module; both operate on image embeddings rather
+tions were constrained by the need for per-sample concept         than CLIP similarities, a richer signal, but one that loses the
+annotations. Text-image contrastive foundation models have        grounding in a named concept vocabulary on which our inter-
+since lifted this constraint, enabling CBMs without explicit      pretations rely. Among works on the CLIP-similarity space,
+concept annotations (Yuksekgonul, Wang, and Zou 2023;             Zhao et al. (2026) seek concept-class attributions, and Feng,
+Oikarinen et al. 2023; Yang et al. 2023), with CLIP (Radford      Bair, and Kolter (2024) target sparse attributions, but both
+et al. 2021) becoming the predominant backbone (Kazmier-          remain single-layer frameworks. Several strategies mitigate
+czak et al. 2025b). Several CLIP-based methods introduce          the resulting biases, most by modifying model weights. One
+hierarchical architectures, but rely on a manually specified      family retrains the last layer on a group-balanced calibration
+structure (Panousis, Ienco, and Marcos 2024); our approach        set (Sagawa et al. 2019; Kirichenko, Izmailov, and Wilson
+differs in that the hierarchy emerges from training, without      2022), which is model-agnostic but requires knowing the
+supervision.                                                      spurious attribute per training sample. CLIP-specific meth-
+                                                                  ods instead leverage textual encodings: Chuang et al. (2023)
+2.2   Interpreting and Debiasing CLIP-based                       project the shared embedding space to negate spurious con-
+      CBMs                                                        cepts. Others (Peng et al. 2026; Debole et al. 2026) modify
+A critical concern with foundation models is whether they         the CLIP vision encoder directly. Our method differs from
+base their inferences on meaningful features. This expec-         both families: removal operates post hoc on the learned rep-
+tation is often violated, as in the “Wolf vs. Husky” exam-        resentation (CHOQ-PCR), with no retraining, no per-sample
+ple (Ribeiro, Singh, and Guestrin 2016), where a classifier re-   group labels, and the CLIP weights entirely unchanged.
+lies on snow rather than the object; such spurious correlations
+are widespread in CLIP (Moayeri et al. 2023; Zhang et al.         2.3    Choquet Integrals: From Decision Aid to
+2024). They directly affect CLIP-based CBMs, which suffer                Neural Networks
+from concept unfaithfulness (Debole et al. 2025): individual      Multicriteria decision aid (MCDA) studies transparent aggre-
+concepts do not faithfully reflect what they denote, being en-    gation models for high-stakes settings where a human makes
+tangled with correlated ones, and Kazmierczak et al. (2025a)      the final decision; such models are elicited from experts or
+show that absent but semantically suggested concepts yield        learned from data (Sobrie, Mousseau, and Pirlot 2019; Mar-
+tyn and Kadziński 2023). Among MCDA formalisms, the
+Choquet integral (Choquet 1953) aggregates criteria with
+respect to a capacity, weighting coalitions rather than iso-
+lated criteria, and can be learned from examples (Tehrani
+et al. 2012; Herin, Perny, and Sokolovska 2024); see Gra-
+bisch and Labreuche (2010) for a survey. Its 2-additive re-
+striction (Grabisch 1997) keeps only individual weights and
+pairwise interactions and admits closed-form Shapley val-
+ues, which model-agnostic explainers must otherwise ap-
+proximate (Lundberg and Lee 2017; Pelegrina, Duarte, and
+Grabisch 2023); these exact attributions extend to hierarchi-
+cal models (Labreuche and Fossier 2018; Labreuche 2022).
+Neural formulations are recent: Islam et al. (2020) use fuzzy
+integrals as aggregation layers, and Bresson et al. (2020)
+design networks whose parameter space coincides with hier-
+archical 2-additive Choquet integrals when the hierarchy is
+fixed a priori. More broadly, other non-linear aggregations
+replace the linear concept-to-logit map of standard CBMs:
+Bénard et al. (2026) build on the Hoeffding decomposition
+of gradient-boosted trees for sparse, leakage-robust concept       Figure 2: Principle of CHOQOLATE. Choquet layers guide
+aggregation. Closest to our work, Atienza et al. (2024) also       the latent space toward merging semantically similar con-
+map images onto CLIP-based concepts, but their Choquet             cepts, producing sparse and interpretable nodes, visualized
+model is a student distilled to explain a pixel-based teacher.     as word clouds from closed-form Shapley values.
+CHOQOLATE instead trains the Choquet layers as the pre-
+dictor itself, with no teacher and no distillation, taking the
+concept space as its object of study: fusing redundant con-
+cepts into coherent nodes without supervision, explaining          3.2   The 2-Additive Choquet Integral
+why this organization emerges, and supporting post-hoc con-        The Choquet integral generalizes the weighted mean by let-
+cept removal (CHOQ-PCR).                                           ting criteria interact. Its 2-additive form keeps only pair-
+                                                                   wise interactions, hence a quadratic rather than exponential
+                     3   Background                                parameter count (Grabisch 1997; Grabisch and Labreuche
+                                                                   2010). We adopt the neural formulation of Bresson et al.
+3.1   Concept Bottlenecks from CLIP Similarities                   (2020): for u = (u1 , . . . , up ) ∈ [0, 1]p ,
+Task and notation. We consider C-way image classifi-                        p
+cation: an image I ∈ X carries a one-hot label y =                                          X
+                                                                            X                                                            
+                                                                   C(u) =         aj uj +         bj,l min(uj , ul ) + cj,l max(uj , ul ) ,
+(y1 , . . . , yC ) ∈ {0, 1}C . Throughout, j and l index con-               j=1             j<l
+cepts (more generally, the coordinates of a Choquet integral                                                                    (2)
+input), n ∈ {1, . . . , N } the nodes of our intermediate layer,
+                                                                                                   P         P
+                                                                   where aj , bj,l , cj,l ≥ 0 and j aj + j<l (bj,l + cj,l ) =
+and r ∈ {1, . . . , C} the classes.                                1, the normalization constraint. These conditions make C
+                                                                   monotone in each coordinate, confine its output to [0, 1],
+Concept similarities. A vision-language model provides
+                                                                   and cost no expressiveness: nonnegative min/max decom-
+two encoders into a shared d-dimensional space, CLIPimg :
+                                                                   positions parametrize exactly the monotone normalized 2-
+X → Rd and CLIPtext : T → Rd , with T a space                      additive integrals (Grabisch 1997). The equation reads nat-
+of textual descriptions. We fix M textual concepts K =             urally: min(uj , ul ) is a soft conjunction, large only when
+{k1 , . . . , kM } ⊂ T , each naming an attribute that may or      both inputs are, so a positive bj,l encodes complementarity;
+may not be visible in an image. The CLIP similarity between        max(uj , ul ) is a soft disjunction, so a positive cj,l encodes
+an image I and kj is                                               substitutability (Bresson et al. 2020); the weights aj alone
+                                                                   recover a weighted mean.
+          Scorej = ⟨CLIPimg (I), CLIPtext (kj )⟩.           (1)
+
+A per-concept min-max normalization, fitted on the train-          Shapley values. The contribution of coordinate j to the
+ing set, maps this score to zj ∈ [0, 1], which plays the           output has a closed form, classical for 2-additive mea-
+role of a marginal utility in multicriteria models (Bres-          sures (Grabisch 1997):
+son et al. 2020). Stacking gives the concept bottleneck                                                  1X
+Z = (z1 , . . . , zM ) ∈ [0, 1]M , which a CLIP-based CBM
+                                                                                                                       
+                                                                               Shap(j) = aj +               bj,l + cj,l .               (3)
+feeds to a trainable classifier, both encoders frozen. Vision-                                           2
+                                                                                                           l̸=j
+language models entangle related concepts, so groups of co-
+ordinates co-activate; recovering these clusters automatically     A coordinate matters either on its own, through aj , or through
+is our goal (Figure 2).                                            its pairwise interactions, each counted for half.
+                       4      CHOQOLATE                                                            5     Analysis of one Choquet layer
+4.1    Architecture and Training                                                          We now provide insights about why Choquet layers organize
+                                                                                          the concept space without any explicit supervision on concept
+From classifier to Choquet layers. CHOQOLATE re-
+                                                                                          clustering. To isolate the mechanism, we study a one-layer
+places the classifier of a CLIP-based CBM with two Choquet
+                                                                                          Choquet classifier. Once the input u ∈ [0, 1]p is fixed, we
+layers: the point is not to read the concept space out but to
+                                                                                          can define the feature vector
+reshape it (Figure 2). The CLIP encoders stay frozen; only                                        
+the Choquet weights are learned.                                                                                                               
+                                                                                            ϕ(u) = (uj )j≤p , min(uj , ul ) j<l , max(uj , ul ) j<l (5)
+Choquet layers. A Choquet layer stacks N integrals
+                                                                                          The unnormalized weights of the Choquet layer are de-
+C (1) , . . . , C (N ) , each applied to the whole input vector. Each
+                                        (n)  (n)  (n)                                     noted θ(r) ; their softmax w(r) = softmax(θ(r) ) =
+C (n) carries its own weights aj , bj,l , cj,l , obtained from                            (a(r) , b(r) , c(r) ) enforces the normalization constraint, and
+unconstrained parameters θ(n) through a reparametrization                                 class r is scored by a plain inner product,
+that enforces nonnegativity and the normalization constraint
+by construction (Appendix A); gradient descent thus operates                                                C (r) (u) = ⟨w(r) , ϕ(u)⟩.                (6)
+on θ(n) while the integral always remains a valid 2-additive
+                                                                                          Proposition 1 (Choquet gradient). Consider the one-layer
+Choquet integral.
+                                                                                          Choquet classifier (6) trained with the classical cross-
+Two-layer architecture. The first layer takes the concept                                 entropy loss Loss. For every class r and every feature index i,
+scores Z and outputs N ≪ M Choquet Integral (CI) values
+                                                                                                ∂Loss                (r)
+                                                                                                            ŷr − yr · wi · ϕi (u) − C (r) (u) .
+                                                                                                                                              
+by grouping semantically related concepts through learned                                               =                                             (7)
+                                                                                                  (r)
+Choquet integrals, forming an interpretable bottleneck. The                                     ∂θi
+second layer maps these N CI values to class scores via an-
+other set of Choquet integrals. All the interpretability sits in                             The gradient factorizes into the classification error, the
+the first layer, whose integrals we call nodes: the contribu-                             current weight of the feature, and its deviation from the inte-
+                                                                                          gral’s output (proof in Appendix F). Hence two mechanisms:
+tion of concept kj to node n is its Shapley value Shap(n) (j),                            a small weight means a vanishing gradient, freezing unse-
+obtained by applying (3) to the weights of C (n) , rendered                               lected features out of the dynamics; and updates concentrate
+as word clouds (Figure 2), and edited by the intervention of                              on features farthest from the integral value, inducing the
+Section 4.2.                                                                              anchoring of Section 6.3. Both need a non-negligible error
+Training objective. With y the one-hot label and ŷr ce
+                                                                              (T )        term, which the inner factors, of magnitude at most one, can
+the temperature-scaled softmax of the second-layer outputs                                only shrink; hence a temperature Tce > 0, which rescales the
+                                                                                                                                        (T )
+(Appendix A), we train both layers end to end by minimizing                               gradient by 1/Tce and replaces ŷr with ŷr ce (Corollary 1,
+                                                                                          Appendix F): a small Tce kills the error term, and the spar-
+                    C                              N X
+                    X                              X             (n)       (n)           sity pressure with it, once the model is confident. In practice,
+  Loss(Tce ) = −           yr log ŷr(Tce ) +λℓ1               bj,l + cj,l          .
+                                                                                          class scores live in [0, 1], so logit gaps never exceed one and
+                    r=1                            n=1 j<l
+                |            {z            }       |            {z             }          the untempered softmax stays near uniform; our Tce = 0.005
+                    scaled cross-entropy           ℓ1 on first-layer interactions         restores a usual logit range without going as far as saturation.
+                                                                                    (4)
+The ℓ1 penalty, of strength λℓ1 ≥ 0, acts on the first-layer                                                  6    Experiments
+interaction weights only and pushes each node toward few
+pairwise interactions.                                                                    We structure our experiments around three research ques-
+                                                                                          tions:
+4.2    CHOQ-PCR: Post-hoc Concept Removal                                                 1. RQ1: Does CHOQOLATE achieve a favorable trade-off
+Suppose a spurious attribute leaks into the prediction through                               between classification accuracy and latent-space inter-
+a few identifiable concepts. CHOQOLATE lets us cut them                                      pretability?
+out without retraining: CHOQ-PCR (Post-hoc Concept Re-                                    2. RQ2: Does the latent organization emerge as predicted
+moval) nullifies a concept kj by zeroing every first-layer                                   by the gradient analysis in Section 5?
+                            (n)           (n)  (n)
+weight that involves it, aj ← 0 and bj,l , cj,l ← 0 for all                               3. RQ3: Can post-hoc removal of spurious concepts effec-
+l and n. The edit is unambiguous, weights being nonnega-                                     tively mitigate bias?
+tive and Shap(n) (j) (3) fully summarizing what kj brings
+to node n; and it is surgical: the remaining weights are only                             6.1    Setup
+rescaled by a common factor to restore the normalization                                  Datasets. We evaluate on four classification datasets: Cat-
+constraint, so the relative contributions within each node are                            s/Dogs/Cars (CDC) (Kazmierczak et al. 2024) (3 classes,
+unchanged. Unlike pruning a flat linear head (Yuksekgonul,                                39 concepts), MonumAI (Lamas et al. 2021) (architec-
+Wang, and Zou 2023), which removes one weight per con-                                    tural styles; 4 classes, 15 concepts), COCO (Lin et al.
+cept, the nullification also removes every pairwise interaction                           2014) (location-type recognition; 6 classes, 80 concepts),
+of the concept, and the Shapley values quantify exactly what                              and CUB-200-2011 (CUB) (Wah et al. 2011) (fine-grained
+each node lost.                                                                           bird species; 200 classes, 226 concepts). Bias mitigation is
+assessed on two binary datasets with controlled spurious cor-     deviation. We further examine how this difficulty scales with
+relations: Waterbirds (Sagawa et al. 2019) and CelebA (Liu        the label space in Appendix D.2. Despite its constraints (non-
+et al. 2015). Dataset constructions, spurious/non-spurious        negative weights summing to one, hence monotone aggrega-
+concept splits, and full class and concept lists are given in     tion), CHOQOLATE thus stays competitive: they appear to
+Appendix B (Tables A1 and A2).                                    act as a regularizing prior, and the interaction weights add
+                                                                  expressivity. Only on Cats/Dogs/Cars, the simplest dataset,
+Metrics. Task performance is measured by accuracy; la-            does this structure hinder rather than help. Figure 3 then car-
+tent quality by two complementary metrics, detailed in Ap-        ries our central claim: CHOQOLATE organizes the latent
+pendix C. Attribution Gini (Hurley and Rickard 2009) tak-         space better at comparable accuracy, sitting in the upper-right
+ing values in [0, 1] quantifies the concentration of Shapley      corner of nearly every panel. It dominates Attribution Gini
+attributions within a node: a high value indicates a node         everywhere, surpassing even SLR-AVD, which applies ℓ1 to
+relying on a few salient concepts, a low value a diffuse,         all weights. We attribute this to the softmax reparametriza-
+polysemantic one. Node Coherence, which we introduce,             tion, absent from SLR-AVD, whose role is confirmed by the
+measures whether these concepts are statistically related: It     ablation of Appendix D.2. CHOQOLATE also achieves the
+is defined as the average of the pairwise correlations Sjl        best or statistically comparable Node Coherence everywhere
+between concept scores over the test set weighted by the at-      except MonumAI, whose more technical concept set (Table
+tributions Shap(n) (j) · Shap(n) (l), so that only the concepts   A1) is inherently harder to cluster. As a practical illustra-
+a node relies on contribute. It takes values in [−1, 1], a high   tion, Figure 4 displays global explanations as word clouds,
+value meaning that a node aggregates correlated, semanti-         concept size reflecting Shapley importance (3), on Cats/-
+cally related concepts, and we report its average over the N      Dogs/Cars (more in Appendix D.3). The clouds of CHOQO-
+nodes. While not related to interpretability or classification    LATE are salient, a direct consequence of the dynamics of
+performance, we also measure two additional information-          Section 5, and semantically grouped: one node collects ear,
+preservation metrics, CKNNA and HSIC, in Appendix D.1.            muzzle, and torso, another bodywork, license plate, and en-
+Baselines. As one of the most widely used competitors, we         gine, shaped by the classification task. Some redundancy
+first compare against PCBM (Yuksekgonul, Wang, and Zou            across nodes indicates that the model favors few strongly
+2023). We further compare against state-of-the-art methods        discriminative concepts over uniform coverage, suggesting
+that emphasize learning sparse and interpretable represen-        several low-utility concepts in the original vocabulary.
+tations, namely SLR-AVD (Feng, Bair, and Kolter 2024),
+PSCBM (Zhao et al. 2026), and sparse autoencoders (Bricken        6.3   RQ2: Emergence of the Organization
+et al. 2023).                                                     We next test whether the latent organization emerges as pre-
+                                                                  dicted by the analysis of Section 5. To this end, we use Equa-
+Hyperparameters. CHOQOLATE is trained for 100
+                                                                  tion (3) to track per-concept attributions throughout training,
+epochs with a batch size of 512 and a learning rate of 0.1. We
+                                                                  monitoring the concepts train, car, bed, frisbee, and surf-
+apply an ℓ1 penalty with strength λℓ1 = 0.01 to the first-layer
+                                                                  board on COCO, whose concept set spans contrasted seman-
+interaction terms to encourage sparse concept interactions.
+                                                                  tic groups (transportation, leisure), and report their evolution
+The concept-to-class mapping uses a softmax with tempera-
+                                                                  in the nodes where they receive non-negligible weight in Fig-
+ture Tce = 0.005. Unless stated otherwise, interaction terms
+                                                                  ure 5. In both nodes, we observe a two-step process. First, a
+are enabled in all reported experiments. For all methods,
+                                                                  single concept, which we refer to as the anchor (train in node
+we fix the latent dimension to 8, chosen as a trade-off be-
+                                                                  2 and frisbee in node 4), exhibits a rapid spike in attribution:
+tween a size large enough to preserve accuracy and one small
+                                                                  attribution mass being conserved by the softmax, an early
+enough to yield compact explanations; a sensitivity analysis
+                                                                  gain comes at the expense of all other concepts. Second, a re-
+over smaller and larger values is provided in Appendix D.2.
+                                                                  finement phase occurs in which concepts semantically related
+The hyperparameter search was performed by dichotomy.
+                                                                  to the anchor progressively gain attribution, while unrelated
+The CLIP backbone is the ViT-L/14@336px model from the
+                                                                  concepts are driven to zero. Both steps match Proposition 1:
+original CLIP release (Radford et al. 2021).                                    (r)
+                                                                  the factor wi freezes near-zero weights out of the dynam-
+6.2   RQ1: Accuracy–Interpretability Trade-off                    ics, while the deviation factor ϕi (u) − C (r) (u) pushes down
+We first ask whether CHOQOLATE achieves a better                  the concepts unrelated to the anchor, whose lost weight the
+accuracy/organization-quality trade-off than existing inter-      softmax renormalization transfers to related ones.
+pretable representations. Figure 3 plots accuracy against each
+quality metric; numerical values are in Tables A3 and A4          6.4   RQ3: Post-hoc Bias Mitigation
+(Appendix D.1). To further assess the validity of these com-      Finally, we ask whether the exact concept attributions of
+parisons, we report a Mann Whitney U-test in Appendix E.          CHOQOLATE can be exploited after training, using bias mit-
+On accuracy, CHOQOLATE is on par with its competitors             igation as a case study. We apply CHOQ-PCR (Section 4.2),
+overall, ranking first on MonumAI and COCO and second on          assuming the spurious concepts are known, here identified
+Cats/Dogs/Cars and CUB (Table A3). CUB, with 200 classes          from the dataset definition, and report accuracy and worst-
+behind an 8-node bottleneck, is hard for every method: all ac-    group accuracy (Appendix C) on datasets Waterbirds and
+curacies drop, and CHOQOLATE matches the best baseline            CelebA, whose spurious factors are the background and gen-
+(34.20±1.56 vs. 35.84±12.26) with a far smaller run-to-run        der.
+                                              Cats/Dogs/Cars                      Monumai                                    Coco                             CUB
+                              0.700                                                                                                             0.55
+                                                                                                          0.40
+                              0.675                                    0.60                                                                     0.50
+                              0.650
+
+             Node coherence
+                                                                                                          0.35                                  0.45
+                              0.625                                    0.55
+                                                                                                                                                0.40
+                              0.600                                                                       0.30
+                              0.575                                    0.50                                                                     0.35
+                                                                                                          0.25
+                              0.550                                                                                                             0.30
+                                                                       0.45
+                                                80        100                    40         60                      50       55     60   65              20           40
+                                               Accuracy (%)                      Accuracy (%)                            Accuracy (%)                  Accuracy (%)
+
+
+                                                                                                              0.8                                1.0
+                                        0.9
+                                                                           0.7                                0.7
+                                        0.8                                                                                                      0.8
+                     Attribution Gini
+
+
+
+
+                                        0.7                                0.6                                0.6
+                                                                                                                                                 0.6
+                                        0.6                                0.5                                0.5
+                                        0.5                                                                                                      0.4
+                                                                           0.4                                0.4
+                                        0.4
+                                                                           0.3                                0.3
+                                                80        100                    40         60                      50       55     60   65              20           40
+                                               Accuracy (%)                      Accuracy (%)                            Accuracy (%)                  Accuracy (%)
+                                                                CLIP-SAE         PCBM            CLIP-PSCBM              SLR-AVD         CHOQOLATE
+
+Figure 3: Accuracy vs. organization-quality metrics across datasets. Each column corresponds to one dataset (Cats/Dogs/Cars,
+MonumAI, COCO, CUB), each row to a quality metric. Each point is a method averaged over twenty runs, with ellipses indicating
+variance bounds.
+
+
+
+
+                                                (a) PCBM                                                                                      (b) CHOQOLATE
+
+Figure 4: Global explanations on Cats/Dogs/Cars. Word size reflects concept importance for the node. CHOQOLATE (right)
+yields sparser, more coherent word clouds than the PCBM baseline (left).
+
+
+   We compare two variants of our approach. Concept re-                                                  accuracy, Group-DRO remains competitive and is strongest
+moval (oracle) knows the spurious concepts before training                                               on CelebA, while our intervention is comparable on Water-
+and excludes them from the bottleneck; CHOQ-PCR instead                                                  birds. The value of CHOQ-PCR is thus not raw dominance
+applies post-hoc weight nullification to a model trained on                                              but its unique combination of properties: it is the only method
+the full, biased concept set. The latter is the more prac-                                               that is simultaneously fine-tuning-free, annotation-free, and
+tical setting, as bias is often identified only after deploy-                                            test-time. Reducing the high variance on worst-group accu-
+ment. We further compare against four established baselines:                                             racy, attributable to the small worst group, is left to future
+Group-DRO (Sagawa et al. 2019) and DFR (Kirichenko, Iz-                                                  work.
+mailov, and Wilson 2022), which require group labels and
+fine-tuning, and the CLIP-specific Ortho-Proj and Ortho-                                                                                 7     Limitations
+Cali (Chuang et al. 2023), which remove spurious directions                                              We now state the main limitations of CHOQOLATE and,
+from the embedding space. Results are in Table 1.                                                        more broadly, of Choquet layers. First, CHOQOLATE oper-
+   Both settings improve substantially over the biased model,                                            ates on concept-similarity scores and relies on these scores
+and CHOQ-PCR performs on par with the oracle; the two                                                    being strongly correlated across related concepts, in line with
+confidence intervals overlap, so we read this as comparable                                              the bag-of-words effect of vision-language models (Yuksek-
+rather than superior. We attribute it to two factors: training on                                        gonul et al. 2023; Debole et al. 2025); this redundancy is
+the larger concept set may yield a richer gradient signal and                                            precisely what makes merging effective. Transferring the
+better-structured representations, and nullification introduces                                          approach to another backbone therefore requires an ana-
+an implicit negative signal that actively suppresses unwanted                                            logue of concept scores, and the redundancy assumption
+patterns rather than merely ignoring them. On worst-group                                                should be verified beforehand; the correlation matrix S used
+                                                                                                                               0.16                                                 train
+                0.30                                                                                                           0.14
+                                                                                                                                                                                    car
+                                                                                                                                                                                    bed
+                                                                                                                                                                                    frisbee
+                0.25                                                                                                           0.12                                                 surfboard
+
+
+                0.20                                                                                                           0.10
+
+
+
+
+                                                                                                               Shapley value
+Shapley value
+
+
+
+
+                           train
+                           car
+                0.15
+                           bed                                                                                                 0.08
+                           frisbee
+                           surfboard                                                                                           0.06
+                0.10
+                                                                                                                               0.04
+                0.05                                                                                                           0.02
+                0.00                                                                                                           0.00
+                       0               10       20           30       40         50                                                    0        10       20           30      40          50
+                                                     Epoch                                                                                                    Epoch
+
+                                            (a) CI Node 2                                                                                            (b) CI Node 4
+
+Figure 5: Training dynamics of Shapley attributions on COCO. Per-concept attributions (Eq. (3)) across training epochs, in
+the two nodes where the tracked concepts receive weight.
+
+Table 1: Accuracy (%) of CHOQ-PCR versus debiasing baselines. Baseline: standard training. Concept removal (oracle):
+ground-truth spurious concepts removed. CHOQ-PCR (ours): concept-weight nullification on the biased model at test time.
+FT-free: no fine-tuning; Annot.-free: no group annotations; Test-time: applied at test time. Best per column in bold.
+
+                                                                              Waterbirds                                       CelebA                           Properties
+                                                                                          Worst                                             Worst         FT     Annot.      Test
+                       Method                                        Acc. ↑                               Acc. ↑
+                                                                                         group ↑                                           group ↑       free     free       time
+                       Baseline                                   84.56 ± 1.04         46.51 ± 2.87   89.21 ± 0.28                     23.89 ± 2.72
+                       Concept removal (oracle)                   88.42 ± 0.61         60.28 ± 3.49   91.81 ± 0.15                     32.22 ± 1.45       ✓           ✓
+                       CHOQ-PCR (ours)                            89.52 ± 1.12        68.26 ± 10.14   92.44 ± 1.53                    37.78 ± 11.99       ✓           ✓       ✓
+                       Ortho-Proj                                 88.52 ± 1.08         58.82 ± 3.68    91.65 ± 0.67                   32.00 ± 3.33                    ✓       ✓
+                       Ortho-Cali                                 88.61 ± 0.33         64.14 ± 2.11    89.44 ± 0.47                   11.44 ± 4.18                    ✓       ✓
+                       DFR                                        85.65 ± 2.02         53.15 ± 8.84    87.01 ± 1.55                   37.89 ± 2.91                            ✓
+                       Group-DRO                                  82.09 ± 2.68         67.34 ± 9.46    85.54 ± 1.45                   47.22 ± 3.20                            ✓
+
+
+by Node Coherence provides exactly this diagnostic. Sec-                                                                                   8    Conclusion
+ond, even in the 2-additive case, each first-layer node carries                                      We introduced CHOQOLATE, an architecture based on 2-
+M +2 M             2
+         2 = M weights, hence a quadratic dependence on                                               additive Choquet integrals. Applied to CLIP-based concept
+the vocabulary size. This remains modest at the scale of our                                          bottleneck models, it offers a favorable trade-off between
+experiments (15 to 226 concepts) but becomes prohibitive                                              classification accuracy and latent-space organization. Its per-
+for the tens of thousands of concepts handled by some recent                                          node attributions are much sparser than those of competing
+CBM works (Yang et al. 2023), and rules out settings such as                                          approaches. Our gradient analysis explains this sparsity. Un-
+SAE feature interpretation, where latent units are typically                                          der the softmax reparametrization, the gradient of a concept
+far more numerous. Finally, since all weights are nonnega-                                            is proportional to its current weight, so unselected concepts
+tive and each integral is monotone, CHOQOLATE constrains                                              are progressively frozen out of training. This matches the
+attributions to be nonnegative: explanations can only invoke                                          anchor dynamics we observe empirically. Choquet weights
+the presence of concepts, and evidence of absence (predicting                                         also map to Shapley values in closed form, which enables
+car because no ears are visible) never surfaces in them, even                                         targeted post-hoc edits: CHOQ-PCR suppresses spurious
+when it drives the prediction indirectly through the competi-                                         concepts after training and performs on par with debias-
+tion between class scores. This restriction is the price of the                                       ing methods that require group annotations or retraining, the
+unambiguous edits of CHOQ-PCR; the competitive accuracy                                               edit operating directly in the interpretable concept space.
+of our experiments indicates that the underlying monotone                                             More broadly, Choquet integrals are a promising tool for
+aggregation suffices for the tasks we consider, and extend-                                           interpretable-by-design architectures: the structure they in-
+ing the framework to negative contributions is left for future                                        duce emerges without supervision, and they inherit a solid
+work.                                                                                                 mathematical grounding from decision theory. Future work
+                                                                                                      includes incorporating Choquet layers into prototype-based
+                                                                                                      models (Chen et al. 2019) and, once the quadratic cost in
+                                                                                                      the number of inputs is alleviated, into neuron identification
+                                                                                                      methods (Kalibhat et al. 2023).
+                        References                                 Feng, Z.; Bair, A.; and Kolter, J. Z. 2024. Text Descrip-
+Atienza, N.; Bresson, R.; Rousselot, C.; Caillou, P.; Cohen,       tions are Compressive and Invariant Representations for Vi-
+J.; Labreuche, C.; and Sebag, M. 2024. Cutting the black           sual Learning. Transactions on Machine Learning Research
+box: Conceptual interpretation of a deep neural net with           (TMLR).
+multi-modal embeddings and multi-criteria decision aid. In         Grabisch, M. 1997. K-order additive discrete fuzzy measures
+IJCAI 2024, 33rd International Joint Conference on Artificial      and their representation. Fuzzy sets and systems, 92(2): 167–
+Intelligence, 3669–3678. International Joint Conferences on        189.
+Artificial Intelligence Organization.                              Grabisch, M.; and Labreuche, C. 2010. A decade of appli-
+Bénard, C.; Arfib, M.; Labreuche, C.; and Quétu, V. 2026.          cation of the Choquet and Sugeno integrals in multi-criteria
+Hoeffding Concept Bottleneck Models with Applications to           decision aid. Annals of Operations Research, 175(1): 247–
+Overhead Images. arXiv preprint arXiv:2606.00082.                  286.
+Bhalla, U.; Oesterling, A.; Srinivas, S.; Calmon, F.; and          Gretton, A.; Bousquet, O.; Smola, A.; and Schölkopf,
+Lakkaraju, H. 2024. Interpreting clip with sparse linear con-      B. 2005. Measuring statistical dependence with Hilbert-
+cept embeddings (splice). Advances in Neural Information           Schmidt norms. In International conference on algorithmic
+Processing Systems, 37: 84298–84328.                               learning theory, 63–77. Springer.
+Bresson, R.; Cohen, J.; Hüllermeier, E.; Labreuche, C.; and        Herin, M.; Perny, P.; and Sokolovska, N. 2024. Learning
+Sebag, M. 2020. Neural Representation and Learning of              preference representations based on Choquet integrals for
+Hierarchical 2-additive Choquet Integrals. In Proceedings of       multicriteria decision making. Annals of Mathematics and
+the Twenty-Ninth International Joint Conference on Artificial      Artificial Intelligence, 92(6): 1511–1544.
+Intelligence (IJCAI), 1984–1991.                                   Huh, M.; Cheung, B.; Wang, T.; and Isola, P. 2024.
+Bricken, T.; Templeton, A.; Batson, J.; Chen, B.; Jermyn,          The platonic representation hypothesis. arXiv preprint
+A.; Conerly, T.; Turner, N. L.; Anil, C.; Denison, C.; Askell,     arXiv:2405.07987.
+A.; Lasenby, R.; Wu, Y.; Kravec, S.; Schiefer, N.; Maxwell,        Hurley, N.; and Rickard, S. 2009. Comparing Measures of
+T.; Joseph, N.; Hatfield-Dodds, Z.; Tamkin, A.; Nguyen, K.;        Sparsity. IEEE Transactions on Information Theory, 55(10):
+McLean, B.; Burke, J. E.; Hume, T.; Carter, S.; Henighan, T.;      4723–4741.
+and Olah, C. 2023. Towards Monosemanticity: Decomposing            Islam, M. A.; Anderson, D. T.; Pinar, A. J.; Havens, T. C.;
+Language Models With Dictionary Learning. Transformer              Scott, G.; and Keller, J. M. 2020. Enabling Explainable Fu-
+Circuits Thread.                                                   sion in Deep Learning with Fuzzy Integral Neural Networks.
+Bussmann, B.; Leask, P.; and Nanda, N. 2025. Learning              IEEE Transactions on Fuzzy Systems, 28(7): 1291–1300.
+Multi-Level Features with Matryoshka Sparse Autoencoders.          Kalibhat, N.; Bhardwaj, S.; Bruss, C. B.; Firooz, H.; Sanjabi,
+In International Conference on Machine Learning (ICML).            M.; and Feizi, S. 2023. Identifying Interpretable Subspaces
+Chen, C.; Li, O.; Tao, D.; Barnett, A.; Rudin, C.; and Su, J. K.   in Image Representations. In International Conference on
+2019. This looks like that: deep learning for interpretable im-    Machine Learning, 15623–15638.
+age recognition. Advances in neural information processing         Kazmierczak, R.; Azzolin, S.; Berthier, E.; Frehse, G.; and
+systems, 32.                                                       Franchi, G. 2025a. Enhancing Concept Localization in
+Choquet, G. 1953. Theory of capacities. Annales de l’Institut      CLIP-based Concept Bottleneck Models. arXiv preprint
+Fourier.                                                           arXiv:2510.07115.
+                                                                   Kazmierczak, R.; Azzolin, S.; Berthier, E.; Hedström, A.;
+Chuang, C.-Y.; Jampani, V.; Li, Y.; Torralba, A.; and Jegelka,
+                                                                   Delhomme, P.; Filliat, D.; Bousquet, N.; Frehse, G.; Mancini,
+S. 2023. Debiasing vision-language models via biased
+                                                                   M.; Caramiaux, B.; et al. 2026. Benchmarking xai explana-
+prompts. arXiv preprint arXiv:2302.00070.
+                                                                   tions with human-aligned evaluations. In Proceedings of
+Cukierski, W. 2013. Dogs vs. Cats.                                 the AAAI Conference on Artificial Intelligence, volume 40,
+Debole, N.; Barbiero, P.; Giannini, F.; Passerini, A.; Teso,       37491–37500.
+S.; and Marconato, E. 2025. If Concept Bottlenecks are             Kazmierczak, R.; Berthier, E.; Frehse, G.; and Franchi,
+the Question, are Foundation Models the Answer? arXiv              G. 2024. CLIP-QDA: An Explainable Concept Bottleneck
+preprint arXiv:2504.19774.                                         Model. Transactions on Machine Learning Research Jour-
+Debole, N.; Passerini, A.; Teso, S.; Pugnana, A.; and Mar-         nal.
+conato, E. 2026. Concepts Worth Having: Refining VLM-              Kazmierczak, R.; Berthier, E.; Frehse, G.; and Franchi, G.
+Guided Concept Bottleneck Models with Minimal Annota-              2025b. Explainability and vision foundation models: A sur-
+tions. arXiv preprint arXiv:2605.16405.                            vey. Information Fusion, 122: 103184.
+Dunefsky, J.; Chlenski, P.; and Nanda, N. 2024. Transcoders        Kirichenko, P.; Izmailov, P.; and Wilson, A. G. 2022. Last
+Find Interpretable LLM Feature Circuits. In Advances in            layer re-training is sufficient for robustness to spurious cor-
+Neural Information Processing Systems (NeurIPS).                   relations. arXiv preprint arXiv:2204.02937.
+Elhage, N.; Nanda, N.; Olsson, C.; Henighan, T.; Joseph, N.;       Koh, P. W.; Nguyen, T.; Tang, Y. S.; Mussmann, S.; Pierson,
+Mann, B.; Askell, A.; Bai, Y.; Chen, A.; Conerly, T.; et al.       E.; Kim, B.; and Liang, P. 2020. Concept bottleneck models.
+2021. A mathematical framework for transformer circuits.           In International Conference on Machine Learning, 5338–
+Transformer Circuits Thread, 1(1): 12.                             5348.
+Krause, J.; Stark, M.; Deng, J.; and Fei-Fei, L. 2013. 3D        Peng, P.; Xie, M.-K.; Hao, H.; Jin, T.; and Huang, S.-J. 2026.
+Object Representations for Fine-Grained Categorization. In       Representation-Level Counterfactual Calibration for Debi-
+Proceedings of the IEEE International Conference on Com-         ased Zero-Shot Recognition. Advances in Neural Informa-
+puter Vision (ICCV) Workshops, 554–561.                          tion Processing Systems, 38: 134547–134584.
+Kumar, N.; Berg, A. C.; Belhumeur, P. N.; and Nayar, S. K.       Radford, A.; Kim, J. W.; Hallacy, C.; Ramesh, A.; Goh,
+2009. Attribute and simile classifiers for face verification.    G.; Agarwal, S.; Sastry, G.; Askell, A.; Mishkin, P.; Clark,
+In 2009 IEEE 12th International Conference on Computer           J.; et al. 2021. Learning transferable visual models from
+Vision, 365–372. IEEE.                                           natural language supervision. In International conference
+Labreuche, C. 2022. Explanation with the Winter value: Ef-       on machine learning, 8748–8763. PmLR.
+ficient computation for hierarchical Choquet integrals. Inter-   Rao, C. R. 1982. Diversity and dissimilarity coefficients:
+national Journal of Approximate Reasoning, 151: 225–250.         a unified approach. Theoretical population biology, 21(1):
+Labreuche, C.; and Fossier, S. 2018. Explaining Multi-           24–43.
+Criteria Decision Aiding Models with an Extended Shapley         Rao, S.; Mahajan, S.; Böhle, M.; and Schiele, B. 2024.
+Value. In IJCAI.                                                 Discover-then-Name: Task-Agnostic Concept Bottlenecks
+Lamas, A.; Tabik, S.; Cruz, P.; Montes, R.; Martinez-Sevilla,    via Automated Concept Discovery. In European Conference
+Á.; Cruz, T.; and Herrera, F. 2021. MonuMAI: Dataset, deep       on Computer Vision (ECCV).
+learning pipeline and citizen science based app for monu-        Ribeiro, M. T.; Singh, S.; and Guestrin, C. 2016. “Why
+mental heritage taxonomy and classification. Neurocomput-        Should I Trust You?”: Explaining the Predictions of Any
+ing, 420: 266–280.                                               Classifier. In Proceedings of the 22nd ACM SIGKDD In-
+Lampert, C. H.; Nickisch, H.; and Harmeling, S. 2009.            ternational Conference on Knowledge Discovery and Data
+Learning to detect unseen object classes by between-class        Mining, San Francisco, CA, USA, August 13-17, 2016, 1135–
+attribute transfer. In 2009 IEEE Conference on Computer          1144.
+Vision and Pattern Recognition, 951–958. IEEE.                   Sagawa, S.; Koh, P. W.; Hashimoto, T. B.; and Liang, P. 2019.
+Lewis, M.; Nayak, N.; Yu, P.; Merullo, J.; Yu, Q.; Bach, S.;     Distributionally robust neural networks for group shifts: On
+and Pavlick, E. 2024. Does CLIP Bind Concepts? Probing           the importance of regularization for worst-case generaliza-
+Compositionality in Large Image Models. In Graham, Y.;           tion. arXiv preprint arXiv:1911.08731.
+and Purver, M., eds., Findings of the Association for Com-
+                                                                 Sobrie, O.; Mousseau, V.; and Pirlot, M. 2019. Learning
+putational Linguistics: EACL 2024, 1487–1500. St. Julian’s,
+                                                                 monotone preferences using a majority rule sorting model.
+Malta: Association for Computational Linguistics.
+                                                                 International Transactions in Operational Research, 26(5):
+Lin, T.-Y.; Maire, M.; Belongie, S.; Hays, J.; Perona, P.; Ra-   1786–1809.
+manan, D.; Dollár, P.; and Zitnick, C. L. 2014. Microsoft
+COCO: Common Objects in Context. In European Confer-             Tehrani, A. F.; Cheng, W.; Dembczyński, K.; and Hüller-
+ence on Computer Vision (ECCV), 740–755. Springer.               meier, E. 2012. Learning monotone nonlinear models using
+                                                                 the Choquet integral. Machine learning.
+Liu, Z.; Luo, P.; Wang, X.; and Tang, X. 2015. Deep Learning
+Face Attributes in the Wild. In Proceedings of International     Wah, C.; Branson, S.; Welinder, P.; Perona, P.; and Belongie,
+Conference on Computer Vision (ICCV).                            S. 2011. Caltech-UCSD Birds-200-2011. Technical Report
+Lundberg, S. M.; and Lee, S.-I. 2017. A unified approach to      CNS-TR-2011-001, California Institute of Technology.
+interpreting model predictions. Advances in neural informa-      Yang, Y.; Panagopoulou, A.; Zhou, S.; Jin, D.; Callison-
+tion processing systems, 30.                                     Burch, C.; and Yatskar, M. 2023. Language in a bottle: Lan-
+Martyn, K.; and Kadziński, M. 2023. Deep preference learn-       guage model guided concept bottlenecks for interpretable
+ing for multiple criteria decision analysis. European Journal    image classification. In Proceedings of the IEEE/CVF con-
+of Operational Research, 305(2): 781–805.                        ference on computer vision and pattern recognition, 19187–
+                                                                 19197.
+Moayeri, M.; Wang, W.; Singla, S.; and Feizi, S. 2023. Spu-
+riosity rankings: Sorting data to measure and mitigate bi-       Yuksekgonul, M.; Bianchi, F.; Kalluri, P.; Jurafsky, D.; and
+ases. Advances in Neural Information Processing Systems,         Zou, J. 2023. When and why vision-language models behave
+36: 41572–41600.                                                 like bags-of-words, and what to do about it? In International
+Oikarinen, T.; Das, S.; Nguyen, L. M.; and Weng, T.-W. 2023.     Conference on Learning Representations (ICLR).
+Label-free Concept Bottleneck Models. In The Eleventh In-        Yuksekgonul, M.; Wang, M.; and Zou, J. 2023. Post-hoc
+ternational Conference on Learning Representations, ICLR         Concept Bottleneck Models. In International Conference on
+2023.                                                            Learning Representations (ICLR).
+Panousis, K. P.; Ienco, D.; and Marcos, D. 2024. Coarse-to-      Zhang, M.; Colman, B.; Shahriyari, A.; Bharaj, G.; et al.
+fine concept bottleneck models. Advances in Neural Infor-        2024. Common-Sense Bias Discovery and Mitigation for
+mation Processing Systems, 37: 105171–105199.                    Classification Tasks. arXiv preprint arXiv:2401.13213.
+Pelegrina, G. D.; Duarte, L. T.; and Grabisch, M. 2023. A        Zhao, D.; Huang, Q.; Yan, D.; Sun, Y.; and Yu, J. 2026.
+k-additive Choquet Integral-Based Approach to Approxi-           Partially shared concept bottleneck models. In Proceedings
+mate the SHAP Values for Local Interpretability in Machine       of the AAAI Conference on Artificial Intelligence, volume 40,
+Learning. Artificial Intelligence, 325: 104014.                  13117–13125.
+Zhou, B.; Khosla, A.; Lapedriza, A.; Torralba, A.; and Oliva,
+A. 2016. Places: An image database for deep scene under-
+standing. arXiv preprint arXiv:1610.02055.
+                                    A   Weight Parametrization and Training Procedure
+Each Choquet integral is trained without any explicit constraint: its weights are the softmax of an unconstrained parameter vector
+θ ∈ Rq , with q = p + 2 p2 = p2 ,
+                          
+
+                                               w = (a, b, c) = softmax(θ),                                                   (A1)
+which reads coordinatewise as
+                                                                  b                     c
+                                                 exp(θja )   exp(θj,l )           exp(θj,l )
+                                    aj =                   ,          bj,l =
+                                                                        , cj,l =             ,                        (A2)
+                                                    Ω           Ω                    Ω
+             Pp           a
+                               P          b            c
+                                                            
+where Ω =      j=1 exp(θj ) +    j<l exp(θj,l ) + exp(θj,l ) is the common normalizer. Nonnegativity and the sum-to-one
+condition hold by construction, so the normalization constraint never needs to be projected or penalized: training is plain
+gradient descent on the parameters.
+CHOQOLATE architecture. CHOQOLATE chains two Choquet layers on top of the frozen CLIP encoders CLIPimg and
+CLIPtext , which only serve to produce the concept vector Z (Algorithm A1, line 1). The first maps the concept vector Z to the
+CI values h = (h1 , . . . , hN ), with hn = C (n) (Z); the second maps h to the logit vector o = (o1 , . . . , oC ),
+                                                                       (r)
+                                                         or = Cout (h),          r = 1, . . . , C,                           (A3)
+                                                                                                     (T )
+and a temperature-scaled softmax turns the logits into predicted probabilities, ŷr ce = softmax(o/Tce )r with Tce > 0. We
+train both layers end to end, encoders frozen, by minimizing
+              C                              N X
+                                                          (n)    (n) 
+              X                              X
+Loss = −            yr log ŷr(Tce ) + λℓ1               bj,l + cj,l ,                                                        (4)
+              r=1                            n=1 j<l
+          |           {z        }            |            {z              }
+               cross-entropy                 ℓ1 on first-layer interactions
+
+where y is the one-hot label. The cross-entropy term fits the labels; the ℓ1 penalty, of strength λℓ1 ≥ 0, acts on the first-layer
+interaction weights only, pushing each node toward few pairwise interactions.
+   Algorithm A1 summarizes the procedure. The encoders being frozen, the concept similarities are computed once before
+training; each step then updates only the parameters of the N + C integrals, that is, N M 2 + CN 2 scalars in total.
+
+Algorithm A1: Training procedure of CHOQOLATE
+Require: training images with one-hot labels y; concepts K; frozen encoders CLIPimg , CLIPtext ; nodes N ; temperature Tce ;
+    penalty λℓ1
+ 1: Precompute for every image: similarities Scorej (1), then zj by per-concept min-max normalization fit on the training set;
+    store Z = (z1 , . . . , zM )
+ 2: Initialize the unconstrained parameters θ of the N + C integrals
+ 3: for each epoch do
+ 4:    for each mini-batch do
+ 5:      w = (a, b, c) ← softmax(θ) for every integral {Eq. (A1)}
+ 6:      hn ← C (n) (Z) for n = 1, . . . , N {CI values}
+                   (r)
+ 7:      or ← Cout (h) for r = 1, . . . , C {Eq. (A3)}
+            (Tce )
+ 8:      ŷ        ← softmax(o/Tce )
+                       P         (T )         P P        (n)    (n) 
+ 9:      Loss ← − r yr log ŷr ce + λℓ1 n j<l bj,l + cj,l {Eq. (4)}
+10:      one gradient step on all unconstrained parameters θ
+11:    end for
+12: end for
+13: return the two trained layers, and the attributions Shap(n) (j) (3) for interpretation
+
+
+
+                                                                  B      Dataset Details
+We evaluate on four classification datasets, listed by increasing number of classes:
+ • Cats/Dogs/Cars (CDC) (Kazmierczak et al. 2024), built from the Kaggle Cats and Dogs (Cukierski 2013) and Stanford
+   Cars (Krause et al. 2013) datasets (3 classes, 39 concepts);
+ • MonumAI (Lamas et al. 2021), architectural style classification from facade photographs (4 classes, 15 concepts);
+ • COCO (Lin et al. 2014), where the task is location-type recognition in everyday scenes (6 classes, the 80 standard COCO
+   object categories as concepts);
+ • CUB-200-2011 (CUB) (Wah et al. 2011), fine-grained bird classification widely used in the CBM literature (200 classes,
+   226 concepts).
+Bias mitigation is assessed on two binary datasets with controlled spurious correlations:
+ • Waterbirds (Sagawa et al. 2019) composites CUB birds onto Places backgrounds (Zhou et al. 2016), with a strong (95%)
+   correlation between bird type and background at training time and a balanced test set (48 non-spurious, 9 spurious concepts).
+ • CelebA (Liu et al. 2015) targets the hair-color/gender correlation, with identical spurious-feature proportions across splits
+   (35 non-spurious, 12 spurious concepts).
+  Tables A1 and A2 list the classes and human-annotated concepts associated with each dataset used in our experiments.
+Concepts were selected following the procedure of (Kazmierczak et al. 2026) and correspond to visually grounded attributes
+physically present in the image, so as to minimize the ambiguity inherent in more abstract descriptions.
+
+                                                         C     Metrics
+Attribution Gini. To measure the monosemanticity of nodes, we quantify this with the Gini index of the per-node attribution
+                                                                       (n)            (n)
+vector w(n) = Shap(n) (1), . . . , Shap(n) (M ) , with sorted entries w(1) ≤ · · · ≤ w(M ) ,
+                                               
+
+                                                     PM                   (n)
+                                                        i=1 (2i − M − 1) w(i)
+                                        Gini(n) =             PM (n)             ∈ [0, 1].                                    (A4)
+                                                           M i=1 w(i)
+A value near 0 means the node weights all concepts equally, while a value near 1 means its attribution concentrates on a single
+concept. Like coherence, the index is scale-invariant and thus comparable between our Choquet attributions and the raw weights
+of a linear layer; we report it averaged over nodes. The two metrics are complementary: a node may be sparse yet incoherent, or
+coherent yet diffuse, and a desirable node scores high on both.
+Node coherence. Let S ∈ RM ×M be the correlation matrix of the concept scores Scorej over the test set, and let w(n) =
+ Shap(n) (1), . . . , Shap(n) (M ) be the attribution vector of node C (n) . We define the per-node coherence as the attribution-
+                                  
+weighted average of the pairwise correlations,
+                                                        P         (n) (n)
+                                                          j̸=l wj wl      Sjl
+                                          Coh(n) = P                (n) (n)
+                                                                              ∈ [−1, 1],                                    (A5)
+                                                             j̸=l wj wl
+
+                                                                                                (n)   (n)
+an instance of the similarity-weighted diversity of Rao (1982). Weighting each pair by wj wl restricts the score to the
+concepts the node actually relies on, and the normalization makes it scale-invariant, hence comparable between our Choquet
+attributions and the raw weights of a linear layer. A value near 1 indicates a node aggregating correlated concepts, near 0 a
+node mixing unrelated ones, and negative a node driven by anti-correlated concepts. The Node Coherence metric reported in
+                                    PN
+our experiments is the average |N1 | n=1 Coh(n) over the set of nodes.
+Worst-group accuracy. Following (Sagawa et al. 2019), we partition the test set into groups g ∈ G defined by the joint value
+of the class label y and the spurious attribute a (e.g., bird type and background in Waterbirds). The worst-group accuracy is
+                                                                   1 X
+                                                 Accwg = min             1[ŷi = yi ] ,                                    (A6)
+                                                            g∈G |g|
+                                                                     i∈g
+
+i.e., the lowest accuracy attained over all groups. In contrast to the average accuracy, which can stay high while a model fails on
+under-represented groups, Accwg isolates the groups in which the spurious correlation is broken, and therefore directly measures
+the model’s reliance on the spurious feature.
+                                                         D       Additional results
+D.1    Latent space quality
+For convenience, we display here the numerical results of Figure 3 in Tables A3 and A4.
+
+Table A3: Accuracy (%) on four classification benchmarks. The best result per dataset is in bold. Results are averaged over
+twenty runs, ± denoting standard deviations.
+
+                             Architecture           CDC            MonumAI             COCO              CUB-200
+                             PCBM      96.70 ± 0.72 58.12 ± 8.06 53.49 ± 5.13 18.59 ± 11.38
+                             PSCBM      73.96 ± 3.40 40.10 ± 9.12 56.93 ± 0.62 35.84 ± 12.26
+                             Sparse AE  80.19 ± 4.49 47.16 ± 4.72 54.46 ± 0.33 27.32 ± 1.47
+                             SLR-AVD   90.37 ± 17.70 54.57 ± 10.03 54.28 ± 4.90 19.41 ± 10.01
+                             CHOQOLATE 95.12 ± 0.27 68.94 ± 1.18 64.15 ± 0.25 34.20 ± 1.56
+
+
+Table A4: Latent space quality metrics across four benchmarks. The best result per column is in bold. ↑ higher is better.
+Results averaged among twenty runs, ± corresponding to standard deviations.
+
+                       Cats/Dogs/Cars                          MonumAI                          COCO                            CUB-200
+                     Attr.           Node              Attr.             Node           Attr.           Node            Attr.             Node
+ Architecture
+                    Gini ↑           Coh. ↑           Gini ↑             Coh. ↑        Gini ↑           Coh. ↑         Gini ↑             Coh. ↑
+ PCBM            0.386 ± 0.021    0.549 ± 0.011    0.349 ± 0.034  0.478 ± 0.021     0.404 ± 0.086    0.408 ± 0.005 0.482 ± 0.088 0.303 ± 0.016
+ PSCBM           0.394 ± 0.034    0.612 ± 0.059    0.394 ± 0.032 0.583 ± 0.052      0.407 ± 0.010    0.233 ± 0.010 0.390 ± 0.007 0.385 ± 0.029
+ Sparse AE       0.398 ± 0.013    0.558 ± 0.009    0.345 ± 0.020  0.511 ± 0.013     0.422 ± 0.019    0.399 ± 0.004 0.433 ± 0.006 0.303 ± 0.002
+ SLR-AVD         0.394 ± 0.031    0.550 ± 0.012    0.356 ± 0.031  0.478 ± 0.025     0.425 ± 0.061    0.408 ± 0.005 0.321 ± 0.068 0.289 ± 0.009
+ CHOQOLATE      0.924 ± 0.012    0.680 ± 0.020    0.701 ± 0.076 0.487 ± 0.036      0.779 ± 0.017    0.409 ± 0.006 0.982 ± 0.006 0.490 ± 0.051
+
+
+   In addition, we report in Table A5 two additional metrics, CKNNA (Huh et al. 2024) and HSIC (Gretton et al. 2005), which
+both quantify the amount of information preserved between the input embedding (the CLIP-score vector Z) and the learned
+intermediate representation. These metrics are commonly used in representation-learning literature as proxies for how faithfully
+a layer preserves the structure of its input.
+   We deliberately exclude these two quantities from the main-paper evaluation, as they do not measure interpretability or
+representation quality in the sense we target. Rather, they answer a distinct question: should the intermediate latent representation
+maximize information sharing with the input? As discussed in Section 1, a good concept bottleneck representation must
+preserve enough information to maintain prediction quality, which corresponds to maximizing mutual information with the
+output distribution, but does not necessarily require maximizing mutual information with the input. In fact, an over-faithful
+preservation of the input is at odds with the goal of compressing redundant concepts into a low-dimensional, semantically
+coherent representation: a method that simply copies its input would obtain near-perfect CKNNA and HSIC while providing no
+interpretability benefit at all.
+   We therefore report these metrics for transparency rather than as a basis for ranking. As shown in Table A5, methods that
+operate close to the identity (such as Sparse AE on simple datasets) tend to score highly, while CHOQOLATE trades some of
+this raw input-preservation for the structural properties (sparsity, semantic coherence) reported in the main paper.
+
+Table A5: CKNNA and HSIC across architectures and datasets. Both metrics quantify the amount of information shared
+between the CLIP-score input and the learned latent representation. High values indicate that the representation preserves the
+input structure but do not, on their own, indicate good interpretability or concept organization (see text).
+
+                        Cats/Dogs/Cars                         MonumAI                          COCO                            CUB-200
+ Architecture       HSIC ↑         CKNNA ↑            HSIC ↑         CKNNA ↑          HSIC ↑           CKNNA ↑         HSIC ↑         CKNNA ↑
+ PCBM            0.588 ± 0.130    0.389 ± 0.262   0.540 ± 0.180    0.331 ± 0.272   0.088 ± 0.051    0.000 ± 0.000   0.745 ± 0.116   0.328 ± 0.220
+ PSCBM           0.779 ± 0.009    0.485 ± 0.112   0.874 ± 0.015    0.557 ± 0.035   0.499 ± 0.013    0.142 ± 0.041   0.938 ± 0.011   0.553 ± 0.132
+ Sparse AE       0.945 ± 0.008    1.084 ± 0.173   0.845 ± 0.035    0.710 ± 0.359   0.769 ± 0.105    0.082 ± 0.080   0.887 ± 0.010   1.113 ± 0.149
+ SLR-AVD         0.490 ± 0.209    0.279 ± 0.301   0.460 ± 0.205    0.204 ± 0.233   0.097 ± 0.040    0.000 ± 0.000   0.725 ± 0.220   0.394 ± 0.316
+ CHOQOLATE       0.924 ± 0.035    0.739 ± 0.151   0.927 ± 0.024    0.708 ± 0.125   0.950 ± 0.014    0.666 ± 0.139   0.706 ± 0.047   0.130 ± 0.074
+
+
+D.2    Ablation study
+Cross-entropy temperature We propose here to observe the implication of the hyperparameter Tce by drawing accuracy /
+latent space quality plots for several values: 0.001, 0.002, 0.005, 0.01, 0.05, 0.1 and 1. Results are available on Table A6 and
+Figure A1. Experiments are performed for the standard 2-additive Choquet integral, without ℓ1 regularisation.
+
+                                                                                                                                    Coco
+                                                                                                                   0.48
+
+
+
+
+                                                                                                  Node coherence
+                                                                                                                   0.46
+                                                                                                                   0.44
+                                                                                                                   0.42
+                                                                                                                   0.40
+Table A6: Effect of temperature Tce on CHOQOLATE on                                                                            50      60
+COCO. Accuracy (%) and latent space quality metrics reported                                                                   Accuracy (%)
+on COCO. Results are averaged over five runs, ± denoting stan-
+                                                                                                                         1.0
+dard deviations.
+                                                                                                                         0.8
+
+
+
+
+                                                                                                      Attribution Gini
+                                   Attr.            Node
+         Tce       Acc. ↑                                                                                                0.6
+                                  Gini ↑            Coh. ↑
+        0.001   65.54 ± 0.24   0.377 ± 0.016     0.402 ± 0.002                                                           0.4
+        0.002   65.37 ± 0.16   0.482 ± 0.025     0.403 ± 0.002                                                                 50      60
+                                                                                                                               Accuracy (%)
+        0.005   64.93 ± 0.14   0.694 ± 0.008     0.397 ± 0.003
+         0.01   63.60 ± 0.41   0.828 ± 0.011     0.410 ± 0.008
+         0.05   51.93 ± 0.80   0.968 ± 0.003     0.457 ± 0.029                                             Tce=0.001                        Tce=0.05
+                                                                                                           Tce=0.002                        Tce=0.1
+          0.1   51.05 ± 1.19   0.973 ± 0.006     0.462 ± 0.030                                             Tce=0.005                        Tce=1.0
+          1.0   49.38 ± 0.62   0.955 ± 0.013     0.435 ± 0.018                                             Tce=0.01
+
+                                                                                     Figure A1: Accuracy vs. organisation qual-
+                                                                                     ity metrics for different values of Tce . Each
+                                                                                     row corresponds to a quality metric. Each
+                                                                                     point represents a method averaged over five
+                                                                                     runs, ellipses representing variance bounds.
+
+  Across nearly all configurations, Tce consistently controls the interpretability–accuracy trade-off. Consistent with the analysis
+of Section 5, large values of Tce drive the network toward overly diffuse, low-confidence predictions that sustain sparsity-
+promoting gradients at the cost of accuracy, while small values cause the error signal to collapse prematurely, yielding dense,
+non-sparse weights. Notably, setting Tce = 1, which amounts to removing this hyperparameter entirely, falls into the latter
+regime, confirming the necessity of its introduction.
+Number of classes on CUB-200 We investigate here how the difficulty of the classification task, controlled by the number of
+classes, affects the accuracy / latent space quality trade-off. To this end, we train CHOQOLATE on subsets of CUB-200 (Wah
+et al. 2011) comprising 5, 10, 20, 50, 100 and 200 classes. Results are available in Table A7 and Figure A2. Experiments are
+performed with the standard configuration adopted in the main paper.
+   We observe a clear tension between task difficulty and representation quality. As the number of classes grows, the Attribution
+Gini increases steadily, indicating that the model concentrates each node on fewer concepts, an effect amplified by the low-
+dimensional bottleneck having to discriminate among more classes. Accuracy, however, degrades sharply beyond 20 classes,
+dropping from 88.47% at 20 classes to 54.56% at the full 200 classes, reflecting the limited capacity of the compact representation
+to accommodate a large label space. Node Coherence follows the opposite trend to Gini, decreasing as more classes are added,
+which suggests that the concept groups become more heterogeneous as the model is forced to encode finer-grained distinctions.
+Overall, this experiment delineates the regime in which CHOQOLATE remains effective: a moderate number of classes relative
+to the bottleneck dimensionality, consistent with the limitations discussed in the main paper.
+CHOQOLATE components             We assess the contribution of each component of CHOQOLATE through an ablation study. The
+components considered are:
+ • 1st order: inclusion of the linear term
+                                             P
+                                               j aj uj in the Choquet integral.
+
+ • 2nd order: inclusion of the pairwise interaction terms bj,l min(uj , ul ) + cj,l max(uj , ul ) encoding complementarity and
+   substitutability.
+ • Softmax weights: enforcing the simplex constraint (aj , bj,l , cj,l ≥ 0 and j aj + j<l (bj,l + cj,l ) = 1) via a softmax
+                                                                                  P      P
+   reparametrization.
+ • ℓ1 inter: ℓ1 regularization applied to the first (intermediate) Choquet layer only.
+ • ℓ1 all: ℓ1 regularization applied to all Choquet layers.
+                                                                                                                                    CUB
+                                                                                                             100
+                                                                                                             90
+                                                                                                                            5 10 20
+
+
+
+
+                                                                                              Accuracy (%)
+                                                                                                             80
+                                                                                                                                               50
+                                                                                                             70                                100
+                                                                                                             60                                 200
+Table A7: Effect of the number of classes on CHOQOLATE on                                                    50
+CUB-200. Accuracy (%) and latent space quality metrics reported                                                    0.2     0.4      0.6        0.8        1.0
+                                                                                                                            Attribution Gini
+on CUB-200 subsets of increasing size. Results are averaged over
+five runs, ± denoting standard deviations.                                                                   100
+                                                                                                             90
+                                                                                                                                       20 10         5
+
+
+
+
+                                                                                              Accuracy (%)
+                                     Attr.          Node                                                     80
+      # classes      Acc. ↑
+                                    Gini ↑          Coh. ↑                                                                  50
+                                                                                                             70              100
+         5        86.52 ± 2.46   0.365 ± 0.158   0.430 ± 0.007                                               60                  200
+        10        88.40 ± 1.92   0.467 ± 0.072   0.397 ± 0.003
+                                                                                                             50
+        20        88.47 ± 1.28   0.732 ± 0.017   0.354 ± 0.009
+        50        76.05 ± 0.94   0.844 ± 0.016   0.307 ± 0.010                                                           0.30     0.35     0.40          0.45
+                                                                                                                           Node coherence
+        100       67.58 ± 1.00   0.876 ± 0.015   0.318 ± 0.009
+        200       54.56 ± 0.86   0.910 ± 0.012   0.322 ± 0.003                                                N=5                 N=20                   N=100
+                                                                                                              N=10                N=50                   N=200
+
+
+                                                                                     Figure A2: Accuracy vs. organisation qual-
+                                                                                     ity metrics for different numbers of classes
+                                                                                     on CUB-200. Each row corresponds to
+                                                                                     a quality metric. Each point represents a
+                                                                                     method averaged over five runs, ellipses rep-
+                                                                                     resenting variance bounds.
+
+
+   To do so, we trained on multiple variants on COCO. Results are available on Table A8. The visualisation on the accuracy /
+latent organisation plot is also presented, in Figure A3
+   Overall, row 6 (all components, with ℓ1 regularization restricted to the interaction weights of the intermediate layer) achieves
+the most balanced trade-off on COCO and is therefore adopted as the default configuration throughout the main paper. Notably,
+the ℓ1 penalty and the second-order weights appear to act in synergy: adding the second-order terms to the normalized variant
+(row 3 vs. row 5) leaves both accuracy and latent-space quality essentially unchanged, whereas combining them with the ℓ1
+penalty raises interpretability at comparable accuracy.
+Number of latent nodes We study how the size of the interpretable bottleneck, controlled by the number of latent nodes N , af-
+fects the accuracy / latent-space quality trade-off. We train CHOQOLATE and all baselines on COCO for N ∈ {4, 8, 12, 16, 18},
+keeping every other hyperparameter fixed to the main-paper configuration. Results are reported in Figure A4, with each row
+corresponding to a value of N and each column to a quality metric plotted against test accuracy.
+   Two regimes emerge. For N = 4, the bottleneck is too narrow to accommodate the COCO label space: accuracy drops
+sharply for every method, and the variance of the quality metrics grows, most visibly for CLIP-PSCBM, whose Node Coherence
+becomes highly unstable. Beyond this point, from N = 8 onward, we tend to observe a stabilisation: CHOQOLATE reaches its
+accuracy plateau immediately, whereas the baselines need a much wider bottleneck to approach it. CHOQOLATE dominates
+the Attribution Gini axis at every value of N , by a wide margin over all baselines, while simultaneously attaining the highest
+accuracy. On Node Coherence the margins are tighter: CHOQOLATE remains among the best throughout, whereas CLIP-
+PSCBM collapses once N ≥ 8, indicating that its nodes aggregate increasingly unrelated concepts as the bottleneck widens.
+   Importantly, increasing N beyond 8 yields no further accuracy gain for CHOQOLATE and only a marginal improvement
+in latent-space quality, while making the representation less compact and the word-cloud explanations more redundant across
+nodes. We therefore fix N = 8 in the main paper as the smallest bottleneck that already reaches the accuracy plateau while
+preserving strong sparsity and coherence, and keeping the explanations relatively simple.
+
+D.3    Additional Global Explanations
+We complement the global explanations presented in Section 6 (Figures 4a and 4b) with analogous visualizations on the two
+remaining benchmarks, MonumAI and COCO. As in the main paper, each node is represented by a word cloud in which the
+size of a concept reflects its Shapley contribution to that node. We compare CHOQOLATE against the PCBM on each dataset.
+   The observations remain globally the same as for Cats/Dogs/Cars. The larger concept set leads to slightly noisier word
+                                                                                                                                  Coco
+                                                                                                                 0.41
+
+
+
+
+                                                                                                Node coherence
+                                                                                                                 0.40
+
+                                                                                                                 0.39
+
+                                                                                                                             40   50     60
+Table A8: Ablation study of CHOQOLATE components on                                                                          Accuracy (%)
+COCO. Each row corresponds to a configuration of the model;
+checkmarks indicate enabled components. Accuracy (%) is re-
+ported on COCO. Results are averaged over five runs, ± denoting                                                        0.8
+standard deviations.                                                                                                   0.6
+
+
+
+
+                                                                                                    Attribution Gini
+  1st   2nd Softmax ℓ1 ℓ1                              Attr.          Node                                             0.4
+                                       Acc. ↑
+ order order weights inter all                        Gini ↑          Coh. ↑
+                                                                                                                       0.2
+  ✓                              63.11 ± 0.38     0.416 ± 0.009   0.397 ± 0.005
+  ✓                            ✓ 63.12 ± 0.45     0.418 ± 0.005   0.395 ± 0.001                                        0.0
+  ✓               ✓              64.85 ± 0.22     0.691 ± 0.018   0.402 ± 0.003                                              40   50     60
+  ✓      ✓                       56.90 ± 1.60     0.425 ± 0.013   0.393 ± 0.003                                              Accuracy (%)
+  ✓      ✓        ✓              64.93 ± 0.14     0.694 ± 0.008   0.397 ± 0.003
+  ✓      ✓        ✓       ✓      64.43 ± 0.29     0.767 ± 0.009   0.411 ± 0.003
+  ✓      ✓        ✓            ✓ 42.91 ± 3.44     0.001 ± 0.000   0.415 ± 0.000              2nd + Sfx                             2nd + Sfx + L1(int)
+  ✓      ✓                ✓      55.56 ± 2.05     0.450 ± 0.021   0.389 ± 0.004              Sfx only                              2nd + Sfx + L1(all)
+                                                                                             2nd only                              2nd + L1(int)
+                                                                                             1st only                              1st + L1(int)
+
+                                                                                     Figure A3: Accuracy vs. organisation
+                                                                                     quality metrics for different variants of
+                                                                                     CHOQOLATE. Each row corresponds to
+                                                                                     a quality metric. Each point represents a
+                                                                                     method averaged over five runs, ellipses rep-
+                                                                                     resenting variance bounds.
+
+
+clouds for both methods, consistent with the more nuanced activation-sparsity behaviour reported in Section 6; nonetheless,
+CHOQOLATE still produces visibly more salient and semantically grouped explanations than PCBM. For example, in Figure
+A8, considering that the final objective is to classify types of places, it is interesting to note that the method automatically
+clustered in node 4 concepts associated with outdoor sports (surfboard, frisbee, boat ...), or transportation in node 5 (train, car,
+bus ...).
+                                  E    Statistical Significance of the Main Results
+To confirm that the performance differences between CHOQOLATE and each baseline are statistically significant rather than
+caused by run-to-run variability (Figure 3), we perform a one-sided Mann–Whitney U test for every combination of dataset,
+metric, and baseline.
+   For each comparison, we test the null hypothesis H0 that the distributions of metric values for CHOQOLATE and the baseline
+are identical, against the one-sided alternative hypothesis H1 that CHOQOLATE achieves higher metric values than the baseline.
+A small p value implies rejection of H0 , and acceptance of the alternative.
+   We report the relative median distance ∆ = (medianCHOQOLAT E − medianbaseline )/medianbaseline and the p-values in
+Table A9 just below. Larger ∆ and smaller p value indicate a more clearly separated, more favorable trade-off for CHOQOLATE:
+
+               Table A9: Mann Whitney U-test significance of the CHOQOLATE vs. baseline separation.
+
+                                                                Attr. Gini        Node Coh.
+                                 Dataset          Baseline     ∆        p        ∆         p
+                                                  PCBM        1.37   < 0.001    0.23    < 0.001
+                                                  PSCBM       1.35   < 0.001    0.12    < 0.001
+                                 Cats/Dogs/Cars
+                                                  Sparse AE   1.33   < 0.001    0.21    < 0.001
+                                                  SLR-AVD     1.35   < 0.001    0.23    < 0.001
+                                                  PCBM        0.99   < 0.001   0.01      0.231
+                                                  PSCBM       0.83   < 0.001   −0.13     1.000
+                                 MonumAI
+                                                  Sparse AE   1.10   < 0.001   −0.05     0.994
+                                                  SLR-AVD     1.04   < 0.001   0.02      0.157
+                                                  PCBM        1.06   < 0.001    0.01     0.579
+                                                  PSCBM       0.91   < 0.001    0.76    < 0.001
+                                 COCO
+                                                  Sparse AE   0.85   < 0.001    0.02    < 0.001
+                                                  SLR-AVD     0.85   < 0.001    0.01     0.505
+                                                  PCBM        1.07   < 0.001    0.64    < 0.001
+                                                  PSCBM       1.53   < 0.001    0.29    < 0.001
+                                 CUB-200
+                                                  Sparse AE   1.27   < 0.001    0.63    < 0.001
+                                                  SLR-AVD     2.13   < 0.001    0.73    < 0.001
+
+
+   On Attribution Gini, the separation between CHOQOLATE and every baseline is statistically significant across all four datasets
+(p < 0.001), with consistently large positive median distances (∆ between 0.83 and 2.13). This confirms that CHOQOLATE’s
+sparsity advantage is robust and not attributable to run-to-run variability. CHOQOLATE also improves Node Coherence over
+the baselines, significantly so on Cats/Dogs/Cars and CUB-200 and, on COCO, by a wide margin over PSCBM. The median
+distances on this metric are smaller than for Attribution Gini, and on MonumAI the methods are statistically comparable,
+consistent with the main-paper finding that CHOQOLATE’s coherence advantage is more modest than its sparsity advantage
+and narrows on datasets whose concept vocabularies are harder to cluster.
+                                                F       Proof for a Single Choquet Layer
+Throughout this section, u = (u1 , . . . , up ) ∈ [0, 1]p denotes the input of a Choquet layer. Each class r ∈ {1, . . . , C} is assigned
+a 2-additive Choquet integral C (r) (see Eq. (2)) whose weights
+                                                  (r)            (r)            (r)      (r)            (r)
+                                  w(r) = a1 , . . . , a(r)
+                                                                                                              
+                                                            p , b1,2 , . . . , bp−1,p , c1,2 , . . . , cp−1,p
+                                                |      {z    } |          {z        } |           {z        }
+                                                        first-order terms         min interactions         max interactions
+
+   The 2-additive Choquet integral can be view as a linear function of a feature vector constructed from the input. We build
+the vector ϕ(u), which contains the p coordinates themselves, followed by all the min(uj , ul ) and all the max(uj , ul ) terms
+associated with pairs of coordinates. Therefore, Eq. (2) can be written as the inner product between this feature vector and the
+class weight vector:
+                                                p
+                                                X                      X                                                     
+                                  (r)
+                              C         (u) =           aj , uj +                bj,l min(uj , ul ) + cj,l max(uj , ul )
+                                                j=1                    j<l
+                                                    (r)
+                                           = ⟨w           , ϕ(u)⟩
+                                                                                                                 
+where ϕ(u) =    u1 , . . . , up , min(u1 , u2 ), . . . , min(up−1 , up ) , max(u1 , u2 ), . . . , max(up−1 , up ) . We denote by q = p +
+                | {z } |                            {z                } |                    {z                }
+                 p coordinates                 (p2) minima                              (p2) maxima
+  p
+    
+2 2 = p2 the number of components of ϕ(u).
+
+F.1   Proof of Proposition 1 of the Main Paper
+The logit of class r is hr = C (r) (u), and ŷr = PC exp(h r)
+                                                        exp(h ′ )
+                                                                  is the predicted probability of class r. The target of the sample is
+                                                              r ′ =1         r
+
+a one-hot vector y ∈ {0, 1}C , with coordinates yr and nonzero coordinate at index y⋆ ∈ {1, . . . , C}. Finally, Loss denotes the
+cross-entropy loss; the ℓ1 penalty of the training objective (4) does not depend on the logits and is omitted from the gradient
+                                                                                       PC
+computations below. Since the target is one-hot, the logit of the ground-truth class is r=1 yr hr , and the loss reads
+                                                                       C
+                                                                       X                         C
+                                                                                                 X
+                                                    Loss = −                 yr hr + log               exp(hr ).                   (A7)
+                                                                       r=1                       r=1
+
+  Step 1: gradient with respect to the logits. We differentiate the two terms of (A7) with respect to a logit hr . In the first term,
+only the summand of index r depends on hr , contributing −yr . For the second term, the chain rule applied to the log-sum-exp
+gives
+                                                   C
+                                        ∂       X                        exp(hr )
+                                            log        exp(hr′ ) = PC                 = ŷr .                                    (A8)
+                                      ∂hr                             r ′ =1 exp(hr )
+                                                                                   ′
+                                                r ′ =1
+Summing the two contributions,
+                                                     ∂Loss
+                                                              = ŷr − yr .                                                         (A9)
+                                                      ∂hr
+  Step 2: gradient with respect to the Choquet weights. The logit of class r expands as
+                                                                                           q
+                                                                                                     (r)
+                                                                                           X
+                                                     hr = ⟨w(r) , ϕ(u)⟩ =                        wj ϕj (u)                        (A10)
+                                                                                           j=1
+
+The features ϕj (u) are functions of the input only: they involve no weight, so they are constants with respect to w(r) . The logit
+                                                                                                       (r)
+is therefore linear in the weights, and differentiating the Eq. (A10) with respect to a single weight wi keeps only the summand
+of index j = i,
+                                                            ∂hr
+                                                              (r)
+                                                                  = ϕi (u).                                                 (A11)
+                                                           ∂wi
+Moreover, the weight vector w(r) enters the loss only through the logit hr : the other logits hr′ , r′ ̸= r, are computed from their
+                       ′                                   (r)
+own weight vectors w(r ) . The chain rule from Loss to wi therefore goes through the single intermediate variable hr , and
+combining (A9) with (A11),
+                                       ∂Loss        ∂Loss ∂hr                     
+                                           (r)
+                                                =              (r)
+                                                                    = ŷr − yr ϕi (u).                                        (A12)
+                                       ∂w            ∂hr ∂w
+                                                    i                               i
+  Step 3: gradient with respect to the unconstrained parameters. The weights of class r are obtained from the unconstrained
+parameters by the softmax map,
+                                                               (r)                           (r)                        q
+                                      (r)             exp(θj )                    exp(θj )                              X
+                                                                                                                                   (r)
+                                 wj         = Pq            (r)
+                                                                             =             ,                    Ω :=          exp(θm   ),                                 (A13)
+                                                                                     Ω
+                                                   m=1 exp(θm )                                                         m=1
+
+                    (r)
+so each weight wj         depends on every coordinate of θ(r) through the normalizer Ω. Differentiating the quotient (A13) with
+            (r)                                                 (r)                                       (r)
+respect to θi , the numerator contributes exp(θj ) δji (it depends on θi                                        only when j = i) and the normalizer contributes
+     (r)      (r)
+∂Ω/∂θi = exp(θi ), so
+                                      (r)                (r)                           (r)                (r)
+                                ∂wj               exp(θj ) δji   exp(θj ) exp(θi )    (r)      (r) 
+                                      (r)
+                                             =                 −          2
+                                                                                   = wj δji − wi ,                                                                        (A14)
+                                ∂θi                    Ω                Ω
+                                                                                             (r)                  (r)                (r)               (r)
+where δji is the Kronecker delta and the last equality recognizes wj                                = exp(θj )/Ω and wi                    = exp(θi )/Ω.
+                                       (r)                                       (r)               (r)                                                       (r)
+  Because a single parameter θi              moves all the weights w1 , . . . , wq at once, the chain rule from Loss to θi                                         sums over the
+q weights,
+                                                  q         (r)                                      q
+                               ∂Loss              X ∂Loss ∂wj                                       X                  (r)                (r) 
+                                  (r)
+                                             =          (r)            (r)
+                                                                             =         ŷr − yr                 ϕj (u) wj     δji − wi             ,                      (A15)
+                                ∂θi               j=1 ∂wj            ∂θi                                 j=1
+
+where the second equality substitutes (A12) and (A14), and factors (ŷr − yr ) out of the sum since it does not depend on j.
+  Step 4: simplifying the inner sum. Splitting the sum along the Kronecker delta,
+                  q                                                                           q
+                                (r)           (r)              (r)                     (r)               (r)                  (r)
+                  X                                                                           X
+                                                                                                                                      ϕi (u) − C (r) (u) ,
+                                                                                                                                                        
+                        ϕj (u) wj      δji − wi          =     wi ϕi (u)         −     wi                wj ϕj (u) = wi                                                   (A16)
+                  j=1                                                                         j=1
+
+since the first term retains only j = i and the second sum is the Choquet output. Substituting this expression into Eq. (A15)
+yields
+                                        ∂Loss              (r)
+                                                = ŷr − yr · wi · ϕi (u) − C (r) (u) .
+                                                                                    
+                                           (r)
+                                        ∂θi
+  This concludes the proof.
+
+F.2   Proof of Corollary 1
+Corollary 1 (Effect of temperature scaling). Consider the one-layer Choquet classifier trained with the temperature-scaled
+cross-entropy Loss(Tce ) for a temperature Tce > 0, under the hypotheses of Proposition 1. Then
+                                             ∂Loss(Tce )              1                 (r)
+                                                                         ŷr(Tce ) − yr wi ϕi (u) − C (r) (u) ,
+                                                                                                             
+                                                   (r)
+                                                               =                                                                                                          (A17)
+                                                 ∂θi                 Tce
+                       
+        (T )
+where ŷr ce = softmax Thcer .
+                                                                                                          (T )
+   The prefactor amounts to a change of learning rate; the effect sits in ŷr ce . A small Tce sharpens predictions and kills the
+error term, and the sparsity pressure with it, as soon as the model gets confident; a large one keeps the signal alive at the cost of
+slower convergence. Since Choquet outputs live in [0, 1], logit gaps never exceed one: useful temperatures sit well below one,
+where Tce trades interpretability against accuracy (Appendix D.2).
+   With temperature, the loss (Eq. (A7)) is evaluated on the rescaled logits,
+                                                       C                   C           
+                                                      X       hr          X         hr
+                                        Loss = −           yr     + log       exp         .                                    (A18)
+                                                      r=1
+                                                              Tce         r=1
+                                                                                    Tce
+
+We differentiate with respect to hr , using ∂(hr /Tce )/∂hr = 1/Tce . In the first term, only the summand of index r depends
+on hr , contributing −yr /Tce . For the second term, the chain rule applied to the log-sum-exp gives, exactly as in (A8) but with
+rescaled arguments,
+                                        C           
+                               ∂       X         hr′        1        exp(hr /Tce )         1 (Tce )
+                                  log      exp         =                               =      ŷ    .                      (A19)
+                                                                                          Tce r
+                                                                PC
+                            ∂hr        ′
+                                                 Tce       Tce    r ′ =1 exp(hr /Tce )
+                                                                               ′
+                                               r =1
+Summing the two contributions, Step 1 becomes
+                                                  ∂Loss    1
+                                                              ŷr(Tce ) − yr .
+                                                                            
+                                                        =                                                                   (A20)
+                                                   ∂hr    Tce
+Steps 2 to 4 concern only the map from θ(r) to hr , namely hr = ⟨w(r) , ϕ(u)⟩ with w(r) = softmax(θ(r) ), in which Tce plays
+no role: the temperature acts on the classification softmax over the logits, not on the reparametrization softmax over the weights.
+                  (T )
+The factor T1ce ŷr ce − yr therefore carries through Steps 2 to 4 in place of (ŷr − yr ), yielding (A17).
+                           
+
+
+                                                   G     Technical details
+All experiments were run on a single NVIDIA GeForce RTX 4070 SUPER GPU (12 GB of VRAM), using PyTorch on a Linux
+machine.
+ Dataset          Classes                  Concepts
+
+ Cats-Dogs-Cars   cats, dogs, cars         engine, artifact wing, animal wing, stern, tail, locomotive, arm, hair, wheel, chain wheel, handlebar,
+                                           hand, headlight, saddle, body, bodywork, beak, head, eye, foot, leg, neck, torso, cap, license plate,
+                                           door, mirror, window, ear, muzzle, horn, nose, hoof, mouth, eyebrow, plant, pot, coach, screen
+
+ MonumAI          Baroque,    Gothic,      horseshoe arch, lobed arch, pointed arch, ogee arch, trefoil arch, serliana, solomonic column,
+                  Hispanic-Muslim,         pinnacle gothic, porthole, broken pediment, rounded arch, flat arch, segmental pediment, triangular
+                  Renaissance              pediment, lintelled doorway
+
+ COCO             shopping and dining,     person, backpack, umbrella, handbag, tie, suitcase, bicycle, car, motorcycle, airplane, bus, train,
+                  workplace, home or       truck, boat, traffic light, fire hydrant, stop sign, parking meter, bench, bird, cat, dog, horse, sheep,
+                  hotel, transportation,   cow, elephant, bear, zebra, giraffe, frisbee, skis, snowboard, sports ball, kite, baseball bat, baseball
+                  sports and leisure,      glove, skateboard, surfboard, tennis racket, bottle, wine glass, cup, fork, knife, spoon, bowl, banana,
+                  cultural                 apple, sandwich, orange, broccoli, carrot, hot dog, pizza, donut, cake, chair, couch, potted plant,
+                                           bed, dining table, toilet, tv, laptop, mouse, remote, keyboard, cell phone, microwave, oven, toaster,
+                                           sink, refrigerator, book, clock, vase, scissors, teddy bear, hair drier, toothbrush
+
+ CUB-200-2011     200 fine-grained bird    a short, conical bill; a large, conical bill; a stout, conical bill; a long, thin bill; a long, curved bill;
+                  species (e.g., Black-    a thin, curved bill; a hooked bill; a long, hooked bill; a short, hooked beak; a short, stubby bill; a
+                  footed     Albatross,    short, blunt beak; a long, pointed bill; a long, straight beak; a long, thick bill; a large bill; a small
+                  Indigo      Bunting,     bill; a black bill; a yellow bill; a pink bill; a large, orange bill; a dark, glossy bill; a yellow bill with
+                  Brown         Pelican,   a red spot; a red spot on the beak; a black cap; a black hood; a black cap and bib; a brown cap; a
+                  Winter Wren) ;           rusty-brown cap; a red cap on the head; a gray crown; a yellow crown; a white crown; a rust-colored
+                  full list at https:      cap and nape; a brown cap and white eyebrows; a crest on the head; a black crest on the head; a red
+                  //github.com/            crest on the head; a pointy crest on the head; a black mask over the eyes; a black mask across the
+                  yossigandelsman/         face; a black eye stripe; a black line through the eye; a black stripe on the head; a pale stripe above
+                  clip_text_span/blob/     the eye; a white eyebrow; a white stripe over the eye; a black head; a black head and neck; a black
+                  main/utils/cub_          face; a gray head; a red head; a blue head; a green head; a yellow head; a black and white striped
+                  classes.py               head; a violet ear patch; all black plumage; all-white plumage; a black and white plumage; a gray
+                                           and white plumage; a brown and white plumage; a black and orange plumage; spotted plumage; a
+                                           streaked brown plumage; a brownish-gray plumage; grayish-brown plumage; a brown body; a gray
+                                           body; a gray plumage; a dark coloration; a reddish-brown body; a grayish-brown body; a grayish-
+                                           white body; a blue-gray body; a bright yellow body; a bright green body; a green body; iridescent
+                                           plumage; iridescent green plumage; iridescent black feathers; iridescent blue-green back; a glossy,
+                                           black plumage; bright golden-yellow plumage; a vibrant blue plumage; a Scarlet-red body; a bright
+                                           red breast; a rusty-red breast; a bright orange breast; a rosy breast; a pinkish breast; a buffy breast; a
+                                           white breast; a gray breast; a brown breast; a yellow breast; a black breast; a streaked breast; a black
+                                           band across the breast; a black crescent on the breast; dark streaks on the breast; a ruby-red throat;
+                                           a red throat; a yellow throat; a white throat; a white chin and throat; a yellow throat and breast; a
+                                           orange breast and belly; a white belly; a yellow belly; a pale belly; a red belly; white underparts;
+                                           grayish-white underparts; a white underbelly; a light-colored belly; a white rump; a white patch on
+                                           the wing; a brown back; a black back; a gray back; a grayish-brown back; a reddish-brown back;
+                                           a brownish back; a dark gray back; a green back; a blue back; iridescent blue-green back; blue
+                                           upperparts; brown upperparts; gray upperparts; dark blue-black upperparts; olive-green upperparts;
+                                           pale blue-gray upperparts; greenish upperparts; olive-gray upperparts; a streaked back; a gray back
+                                           with black streaks; a brown back with dark streaks; black wingtips; dark wingtips; white wing bars;
+                                           two white bars on the wings; black markings on the wings; white patches on the wings; white stripes
+                                           on the wings; black wings with white bars; brown wings with white bars; black wings with orange
+                                           bars; orange and black wings; blue wings with black bars; blue wings; brown wings; black and
+                                           white wings; gray wings; blue-grey wings and back; long, blue-gray wings; long, pointed wings;
+                                           long, narrow wings; long, tapered wings; long, dark wings; large wingspan; a forked tail; a long,
+                                           deeply forked tail; a long tail; a short tail; a long, narrow tail; a long, pointed tail; a short, notched
+                                           tail; a long, flowing tail; a tail with a distinct V-shape; a black tail; a white tail; a long, black tail;
+                                           a black tail with white sides; a white tail with a black tip; a black and white barred tail; a tail with
+                                           white bars; a small bird; a small, plump bird; a medium-sized bird; a large bird; a large, stocky body;
+                                           a large, stocky bird; a slender body; a long, slender body; a plump body; a stocky body; a round
+                                           body; a small, compact body; long legs; short legs; webbed feet; large webbed feet; long, webbed
+                                           feet; orange legs; orange legs and feet; red legs; black legs; black legs and feet; gray legs; yellow
+                                           legs and feet; pale pink legs; greenish-yellow legs; long, black legs; a long neck; a long, graceful
+                                           neck; a long, slender neck; a long, curved neck; a white collar around the neck; a black ring around
+                                           the neck; a black neck and head; red eyes; yellow eyes; orange eyes; blue eyes; a red ring around
+                                           the eye; a white eye ring; orange or yellow eyes; shiny black eyes; a seabird; a swift, direct flight;
+                                           a swift, acrobatic flight; shy and secretive behavior; a loud, melodious song; a loud, harsh cry; a
+                                           raucous call
+
+Table A1: Classes and supervised concepts for each dataset. Cats-Dogs-Cars uses 39 concepts, MonumAI 15, COCO 80 (the
+standard COCO object categories), and CUB-200-2011 226 concepts.
+       Dataset       Classes               Concepts
+
+                                           Non-spurious: hooked bill, conical bill, thin bill, long bill, curved bill, pointed bill,
+       Waterbirds    landbird, waterbird   black cap, colored crown, eye stripe, face mask, crested head, all-black plumage, all-
+                                           white plumage, iridescent plumage, streaked plumage, spotted plumage, colored breast,
+                                           white belly, pale underparts, banded breast, wing bars, wing patches, dark wingtips,
+                                           long wings, pointed wings, forked tail, long tail, short tail, barred tail, small body, large
+                                           body, stocky body, slender body, long legs, webbed feet, colored legs, long neck, neck
+                                           collar, streaked back, dark back, colored back, soaring flight, large wingspan, secretive
+                                           behavior, red eyes, yellow eyes, eye ring, melodious song
+                                           Spurious: green, sea, river, lake, grass, rocks, trees, sky, blue
+
+                                           Non-spurious: blond hair, black hair, brown hair, gray hair, red hair, dark hair, light hair,
+       CelebA        not blond, blond      straight hair, wavy hair, curly hair, long hair, short hair, bangs, bald head, oval face,
+                                           round face, chubby cheeks, double chin, pale skin, rosy cheeks, high cheekbones, pointy
+                                           nose, big nose, big lips, arched eyebrows, bushy eyebrows, narrow eyes, bags under eyes,
+                                           wearing glasses, smiling, mouth open, young face, old face, attractive, receding hairline
+                                           Spurious: feminine face, masculine face, heavy makeup, lipstick, wearing earrings,
+                                           wearing hat, wearing necklace, wearing necktie, mustache, goatee, beard, sideburns
+
+Table A2: Classes and supervised concepts for the spurious-correlation benchmarks. Concepts are split into non-spurious
+(core, target-predictive attributes) and spurious (attributes correlated with the spurious factor, namely background for Waterbirds
+and gender for CelebA). Waterbirds uses 48 non-spurious and 9 spurious concepts; CelebA uses 35 non-spurious and 12 spurious
+concepts.
+                                                                Attribution Gini                                                                             Node coherence
+                                                                   n_latent = 4                                                                                 n_latent = 4
+                                          0.7
+                                                                                                                                      0.40
+                                          0.6
+
+
+
+
+                                                                                                                     Node coherence
+                       Attribution Gini
+                                                                                                                                      0.38
+                                          0.5
+                                                                                                                                      0.36
+                                          0.4
+                                                                                                                                      0.34
+                                          0.3
+                                                           50               55                  60                                                      50               55                  60
+                                                                Test accuracy (%)                                                                            Test accuracy (%)
+                                                                     n_latent = 8                                                                                 n_latent = 8
+                                          0.8
+                                                                                                                                      0.40
+                                          0.7
+                                                                                                                                      0.35
+
+
+
+
+                                                                                                                     Node coherence
+                       Attribution Gini
+
+
+
+
+                                          0.6
+
+                                          0.5                                                                                         0.30
+
+                                          0.4                                                                                         0.25
+                                          0.3
+                                                      50               55                  60                   65                                 50               55                  60                   65
+                                                                Test accuracy (%)                                                                            Test accuracy (%)
+                                                                     n_latent = 12                                                                                n_latent = 12
+                                          0.8                                                                                         0.40
+
+                                          0.7                                                                                         0.35
+                                                                                                                     Node coherence
+                       Attribution Gini
+
+
+
+
+                                          0.6
+                                                                                                                                      0.30
+                                          0.5
+                                                                                                                                      0.25
+                                          0.4
+                                                 52    54        56         58        60        62         64                                 52    54        56         58        60        62         64
+                                                                Test accuracy (%)                                                                            Test accuracy (%)
+                                                                     n_latent = 16                                                                                n_latent = 16
+
+                                          0.8                                                                                         0.40
+                                                                                                                     Node coherence
+
+
+
+
+                                          0.7
+                       Attribution Gini
+
+
+
+
+                                                                                                                                      0.35
+                                          0.6
+                                                                                                                                      0.30
+                                          0.5
+                                                                                                                                      0.25
+                                          0.4
+                                                52     54        56      58       60         62           64                                 52     54        56      58       60        62            64
+                                                                Test accuracy (%)                                                                            Test accuracy (%)
+                                                                     n_latent = 18                                                                                n_latent = 18
+                                          0.9
+                                                                                                                                      0.40
+                                          0.8
+                                                                                                                     Node coherence
+                       Attribution Gini
+
+
+
+
+                                          0.7                                                                                         0.35
+
+                                          0.6                                                                                         0.30
+                                          0.5
+                                                                                                                                      0.25
+                                          0.4
+                                                58              60               62                  64                                      58              60               62                  64
+                                                                Test accuracy (%)                                                                            Test accuracy (%)
+
+
+                                                                                                             Baseline
+                                                            CLIP-SAE                  PCBM                 CLIP-PSCBM                              SLR-AVD                 CHOQOLATE
+
+Figure A4: Effect of the number of latent nodes N on CHOQOLATE on COCO. Accuracy vs. Attribution Gini (left) and
+Node Coherence (right), for N ∈ {4, 8, 12, 16, 18} (one value per row). Each point is a method averaged over five runs, with
+ellipses indicating variance bounds.
+Figure A5: Global explanations for PCBM. Dataset: MonumAI. The size of each word reflects the importance of the
+corresponding concept for the node.
+
+
+
+
+Figure A6: Global explanations for CHOQOLATE. Dataset: MonumAI. The size of each word reflects the importance of the
+corresponding concept for the node.
+
+
+
+
+Figure A7: Global explanations for the PCBM. Dataset: COCO. The size of each word reflects the importance of the
+corresponding concept for the node.
+Figure A8: Global explanations for CHOQOLATE. Dataset: COCO. The size of each word reflects the importance of the
+corresponding concept for the node.
+
